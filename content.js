@@ -1178,8 +1178,38 @@ Example output format:
           console.warn('⚠️ Element not found in DOM with attributes:', elementData);
           showSTTNotification(`Could not find element: ${elementData.label}`, 'warning');
           
-          // Wait anyway before moving to next step
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // DO NOT proceed to next step - wait for manual user action
+          console.log('⏸️ Tutorial paused - waiting for manual user action');
+          showSTTNotification('Tutorial paused - please complete step manually', 'error');
+          
+          // Wait indefinitely until user manually completes the step
+          await new Promise(resolve => {
+            const checkInterval = setInterval(() => {
+              // Check if element is now found
+              const foundElement = findElementByAttributes(elementData);
+              if (foundElement) {
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }, 2000); // Check every 2 seconds
+          });
+          
+          // After finding element, wait for interaction
+          console.log('✅ Element found, waiting for interaction');
+          const foundElement = await findElementByAttributes(elementData);
+          if (foundElement) {
+            const rect = foundElement.getBoundingClientRect();
+            const position = {
+              x: rect.left + rect.width / 2,
+              y: rect.top + rect.height / 2
+            };
+            await positionPointerAt(position);
+            foundElement.style.outline = '3px solid #ff7a1a';
+            foundElement.style.outlineOffset = '2px';
+            await waitForUserInteractionSimple(foundElement);
+            foundElement.style.outline = '';
+            foundElement.style.outlineOffset = '';
+          }
         }
       }
       
@@ -1294,8 +1324,9 @@ Example output format:
       sphere = createSphere();
     }
     
-    // Disable mouse following by setting global flag
+    // Disable mouse following globally and on sphere
     window.isSphereFollowing = false;
+    sphere.style.cursor = 'default';
     
     // Position sphere at coordinates
     sphere.style.left = `${position.x}px`;
@@ -1306,6 +1337,10 @@ Example output format:
     // Make sphere visible and pulse to draw attention
     sphere.style.opacity = '1';
     sphere.style.animation = 'pulse 1s ease-in-out infinite';
+    
+    // Remove any mouse event listeners that could cause following
+    sphere.onmouseenter = null;
+    sphere.onmousemove = null;
     
     console.log('✅ Pointer positioned (mouse following disabled)');
   }
