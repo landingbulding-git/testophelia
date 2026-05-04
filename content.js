@@ -1054,29 +1054,8 @@ Example output format:
       const tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
       console.log('📚 Tutorial steps loaded:', tutorialSteps);
       
-      // Get the first step's URL
-      if (tutorialSteps.length > 0) {
-        const firstStep = tutorialSteps[0];
-        if (firstStep.url) {
-          console.log('🌐 Navigating to first step URL:', firstStep.url);
-          
-          // Navigate to the first step's URL
-          chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-              chrome.tabs.update(tabs[0].id, { url: firstStep.url });
-            }
-          });
-          
-          // Store tutorial steps for execution after navigation
-          chrome.storage.local.set({ 'pendingTutorial': tutorialSteps });
-          showSTTNotification('Navigating to tutorial start page...', 'info');
-          return;
-        }
-      }
-      
-      // Execute tutorial if no URL navigation needed
+      // Execute tutorial (now includes URL navigation)
       await executeTutorial(tutorialSteps);
-      showSTTNotification('Tutorial loaded and executing', 'success');
       
     } catch (error) {
       console.error('❌ Failed to load tutorial from Firebase:', error);
@@ -1089,18 +1068,28 @@ Example output format:
     try {
       console.log('🚀 Executing tutorial steps...');
       
-      if (!tutorialSteps.steps || !Array.isArray(tutorialSteps.steps)) {
-        console.error('❌ Invalid tutorial steps format');
-        return;
+      // Check if first step has a URL to navigate to
+      if (tutorialSteps.length > 0 && tutorialSteps[0].url) {
+        const firstStepUrl = tutorialSteps[0].url;
+        console.log('🌐 Navigating to entry URL:', firstStepUrl);
+        
+        // Navigate to the entry URL
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs[0]) {
+            chrome.tabs.update(tabs[0].id, { url: firstStepUrl });
+          }
+        });
+        
+        // Wait for navigation to complete before executing steps
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
       
-      for (const step of tutorialSteps.steps) {
-        console.log(`📍 Step ${step.step_number}: ${step.instruction}`);
+      // Execute each tutorial step
+      for (let i = 0; i < tutorialSteps.length; i++) {
+        const step = tutorialSteps[i];
+        console.log(`📍 Step ${i + 1}: ${step.instruction}`);
         
-        // Find and interact with DOM element
-        if (step.dom_element) {
-          await interactWithElement(step.dom_element);
-        }
+        await interactWithElement(step);
         
         // Wait between steps
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1110,7 +1099,7 @@ Example output format:
       showSTTNotification('Tutorial execution complete', 'success');
       
     } catch (error) {
-      console.error('❌ Failed to execute tutorial:', error);
+      console.error('❌ Tutorial execution failed:', error);
       showSTTNotification(`Tutorial execution error: ${error.message}`, 'error');
     }
   }
