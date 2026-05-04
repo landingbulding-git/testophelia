@@ -124,31 +124,14 @@ async function loadTutorial(request, apiKey, projectId) {
       return new Response('sessionId required', { status: 400 });
     }
     
-    // Use Firebase structured query to filter by session_id
-    const firebaseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery?key=${apiKey}`;
+    // Use simple list approach instead of structured query
+    const firebaseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/recording_session?key=${apiKey}`;
     
-    const requestBody = {
-      structuredQuery: {
-        from: [{ collectionId: 'recording_session' }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: 'session_id' },
-            op: 'EQUAL',
-            value: { stringValue: sessionId }
-          }
-        }
-      }
-    };
-    
-    const response = await fetch(firebaseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+    const response = await fetch(firebaseUrl);
     
     if (!response.ok) {
       const error = await response.json();
-      return new Response(JSON.stringify({ error, debug: { sessionId, query: requestBody } }), {
+      return new Response(JSON.stringify({ error, debug: { sessionId } }), {
         status: response.status,
         headers: {
           'Content-Type': 'application/json',
@@ -159,13 +142,20 @@ async function loadTutorial(request, apiKey, projectId) {
     
     const data = await response.json();
     
-    // Return the full raw Firebase response for debugging
+    // Find tutorial by session_id in JavaScript
+    let tutorial = null;
+    if (data.documents) {
+      tutorial = data.documents.find(doc => 
+        doc.fields.session_id.stringValue === sessionId
+      );
+    }
+    
     return new Response(JSON.stringify({ 
-      rawFirebaseResponse: data,
+      tutorial, 
       debug: { 
-        sessionId, 
-        query: requestBody,
-        responseLength: data.length
+        sessionId,
+        totalDocuments: data.documents ? data.documents.length : 0,
+        found: !!tutorial
       } 
     }), {
       headers: {

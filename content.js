@@ -1034,11 +1034,47 @@ Example output format:
       }
       
       const data = await response.json();
-      console.log('📊 Full Firebase response:', data);
-      console.log('📊 Raw Firebase response:', data.rawFirebaseResponse);
+      console.log('📊 Firebase response:', data);
       
-      // For now, just log the raw response - we'll parse it later
-      showSTTNotification('Raw Firebase response logged to console', 'info');
+      // Find the tutorial by session_id
+      let tutorial = data.tutorial;
+      
+      if (!tutorial) {
+        console.error('❌ Tutorial not found in Firebase response');
+        console.error('Looking for session_id:', sessionId);
+        console.error('Total documents:', data.debug?.totalDocuments || 0);
+        throw new Error('Tutorial not found');
+      }
+      
+      console.log('📊 Tutorial structure:', tutorial);
+      
+      // Parse tutorial steps
+      const tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
+      console.log('📚 Tutorial steps loaded:', tutorialSteps);
+      
+      // Get the first step's URL
+      if (tutorialSteps.length > 0) {
+        const firstStep = tutorialSteps[0];
+        if (firstStep.url) {
+          console.log('🌐 Navigating to first step URL:', firstStep.url);
+          
+          // Navigate to the first step's URL
+          chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]) {
+              chrome.tabs.update(tabs[0].id, { url: firstStep.url });
+            }
+          });
+          
+          // Store tutorial steps for execution after navigation
+          chrome.storage.local.set({ 'pendingTutorial': tutorialSteps });
+          showSTTNotification('Navigating to tutorial start page...', 'info');
+          return;
+        }
+      }
+      
+      // Execute tutorial if no URL navigation needed
+      await executeTutorial(tutorialSteps);
+      showSTTNotification('Tutorial loaded and executing', 'success');
       
     } catch (error) {
       console.error('❌ Failed to load tutorial from Firebase:', error);
