@@ -1,133 +1,171 @@
 // Ophelia Assistant — AI-driven live page helper
-// Ctrl+Shift+U → user speaks request → AI scans DOM → generates live steps → guides user
-// After each interaction the DOM is re-checked; if the next element is missing, Gemini re-plans.
+// Ctrl+Shift+U → own dialog (own mic) → scan DOM → Gemini plan → OpheliaPlayer.playSteps()
+// Completely independent of content.js STT routing.
 window.OpheliaAssistant = (() => {
   const GM_WORKER  = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev';
-  const ASSIST_KEY = 'opheliaAssistant'; // cross-page persistence
+  const ASSIST_KEY = 'opheliaAssistant'; // cross-page persistence for navigation resume
 
   let _active      = false;
   let _userRequest = '';
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  async function ask(userRequest) {
-    if (_active) { stop(); return; }
-    _active = true;
-    _userRequest = userRequest;
-    window.opheliaTutorialActive = true;
-
-    notify('🔍 Scanning page…', 'info');
-    const ctx = scanPage();
-
-    notify('🤖 Planning your steps…', 'info');
-    const plan = await generatePlan(userRequest, ctx);
-
-    if (!plan?.steps?.length) {
-      // Never speak the full Gemini message — it could be a long conversational reply.
-      // Give a short audio cue only.
-      const hint = "I couldn't figure out the steps for that on this page. Try rephrasing.";
-      speak(hint);
-      notify(plan?.message || hint, 'error');
-      _reset();
-      return;
+  // activate(): show the input dialog. Called by Ctrl+Shift+U.
+  function activate() {
+    if (window.opheliaTutorialActive) {
+      // A tutorial or previous assistant run is active — stop it first
+      window.OpheliaPlayer?.stop();
     }
-
-    const n = plan.steps.length;
-    speak(`Got it. I have ${n} step${n > 1 ? 's' : ''} for you. Here we go.`);
-    await sleep(1200);
-    await runSteps(plan.steps, 0);
+    _showDialog();
   }
 
   function stop() {
-    window.OpheliaOverlay.hide();
+    _closeDialog();
     chrome.storage.local.remove(ASSIST_KEY);
-    stopSpeaking();
-    notify('Assistant stopped.', 'info');
-    _reset();
+    _active = false;
   }
 
   function isActive() { return _active; }
 
-  // ── Step execution loop ────────────────────────────────────────────────────
+  // ── Input dialog ──────────────────────────────────────────────────────────
+  // Completely self-contained: own STT recognition instance, no shared state.
 
-  async function runSteps(steps, startIndex) {
-    for (let i = startIndex; i < steps.length; i++) {
-      if (!_active) break;
+  function _showDialog() {
+    _closeDialog();
 
-      const step        = steps[i];
-      const instruction = step.instruction || `Step ${i + 1}`;
-      const elData      = step.element || null;
+    const dlg = document.createElement('div');
+    dlg.id = 'ophelia-ask-dialog';
+    dlg.style.cssText = [
+      'position:fixed', 'top:50%', 'left:50%',
+      'transform:translate(-50%,-50%)',
+      'background:rgba(14,14,14,0.98)',
+      'border:1.5px solid #4285f4',
+      'border-radius:16px', 'padding:24px 26px',
+      'width:400px', 'max-width:calc(100vw - 40px)',
+      'color:#fff', 'z-index:2147483647',
+      'box-shadow:0 16px 56px rgba(0,0,0,0.75)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      'animation:opheliaCardIn 0.2s ease-out'
+    ].join(';');
 
-      await waitForDOMStable(500);
+    dlg.innerHTML = `
+      <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+                  color:#4285f4;margin-bottom:10px">🤖 Ophelia Assistant</div>
+      <div style="font-size:15px;color:#e8e8e8;margin-bottom:16px;line-height:1.4">
+        What do you need help with on this page?
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="ophelia-ask-input" type="text" placeholder="Describe your goal…"
+          autocomplete="off" style="flex:1;background:rgba(255,255,255,0.07);
+          border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px 14px;
+          color:#fff;font-size:14px;font-family:inherit;outline:none;
+          transition:border-color .15s" />
+        <button id="ophelia-ask-mic" title="Click to speak"
+          style="background:rgba(66,133,244,0.12);border:1.5px solid #4285f4;
+          border-radius:8px;padding:9px 11px;cursor:pointer;font-size:17px;
+          transition:background .15s;flex-shrink:0">🎤</button>
+        <button id="ophelia-ask-go"
+          style="background:#4285f4;border:none;border-radius:8px;padding:10px 18px;
+          cursor:pointer;color:#fff;font-size:14px;font-weight:600;
+          font-family:inherit;flex-shrink:0;transition:opacity .15s">Go →</button>
+      </div>
+      <div id="ophelia-ask-status"
+        style="font-size:11px;color:#888;margin-top:8px;min-height:14px"></div>
+    `;
+    document.body.appendChild(dlg);
 
-      // Find element — 2 attempts with a brief wait
-      let el = elData ? findEl(elData) : null;
-      if (!el && elData) { await sleep(900); el = findEl(elData); }
+    const input  = dlg.querySelector('#ophelia-ask-input');
+    const micBtn = dlg.querySelector('#ophelia-ask-mic');
+    const goBtn  = dlg.querySelector('#ophelia-ask-go');
+    const status = dlg.querySelector('#ophelia-ask-status');
 
-      const isLast = (i + 1 >= steps.length);
+    input.focus();
 
-      // Pre-save remaining steps BEFORE showing overlay (handles hard navigation)
-      if (!isLast) {
-        chrome.storage.local.set({ [ASSIST_KEY]: {
-          steps, stepIndex: i + 1, userRequest: _userRequest
-        }});
-      }
+    // Submit on Enter or Go button
+    const submit = () => {
+      const text = input.value.trim();
+      if (!text) { input.style.borderColor = '#f44336'; return; }
+      _closeDialog();
+      _processRequest(text);
+    };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') _closeDialog(); });
+    goBtn.addEventListener('click', submit);
 
-      // Correction callback
-      const idx = i;
-      const onCorrect = (correctedEl) => {
-        const info = captureElement(correctedEl);
-        if (info) steps[idx].element = info;
-        notify(`Step ${idx + 1} corrected`, 'success');
-      };
-
-      // Show overlay
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await sleep(300);
-      window.OpheliaOverlay.show({
-        stepNumber: i + 1, totalSteps: steps.length,
-        instruction, element: el, onCorrect
-      });
-      speak(instruction);
-
-      // Wait for user interaction (ignores correction-mode clicks)
-      const startUrl = location.href;
-      await waitForInteraction();
-      window.OpheliaOverlay.hide();
-      stopSpeaking();
-
-      // 500 ms window: if page navigates, JS dies here; new page resumes via checkForPending
-      await sleep(500);
-      if (!_active) break;
-
-      // Still alive → same-page or SPA; clear the pre-save
-      if (!isLast) chrome.storage.local.remove(ASSIST_KEY);
-
-      // After interaction: check if next element still exists; if not, re-plan
-      if (!isLast && _active) {
-        await waitForDOMStable(600);
-        const next = steps[i + 1];
-        if (next.element && !findEl(next.element)) {
-          console.log('🔄 Assistant: next element missing — re-planning…');
-          notify('Adapting plan to page changes…', 'info');
-          const updated = await replan(_userRequest, steps.slice(i + 1), scanPage());
-          if (updated?.length) {
-            steps = [...steps.slice(0, i + 1), ...updated];
-            console.log(`✅ Re-planned ${updated.length} remaining step(s)`);
-          }
+    // Dedicated one-shot mic — completely separate from content.js STT
+    let _micRec = null;
+    micBtn.addEventListener('click', () => {
+      if (_micRec) { _micRec.stop(); _micRec = null; micBtn.textContent = '🎤'; return; }
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { status.textContent = 'Speech not supported in this browser.'; return; }
+      _micRec = new SR();
+      _micRec.continuous = false;
+      _micRec.interimResults = true;
+      _micRec.lang = 'en-US';
+      _micRec.onstart  = () => { micBtn.textContent = '🔴'; status.textContent = 'Listening…'; };
+      _micRec.onresult = (e) => {
+        const t = [...e.results].map(r => r[0].transcript).join('');
+        input.value = t;
+        if (e.results[e.results.length - 1].isFinal) {
+          _micRec = null;
+          micBtn.textContent = '🎤';
+          status.textContent = '✓ Got it — press Go or Enter to start';
         }
+      };
+      _micRec.onerror = (e) => {
+        micBtn.textContent = '🎤';
+        status.textContent = `Mic error: ${e.error}`;
+        _micRec = null;
+      };
+      _micRec.onend = () => { if (_micRec) { _micRec = null; } micBtn.textContent = '🎤'; };
+      _micRec.start();
+    });
+
+    // Click outside → close
+    const onOutside = (e) => {
+      if (!dlg.contains(e.target)) {
+        _closeDialog();
+        document.removeEventListener('click', onOutside, true);
       }
+    };
+    setTimeout(() => document.addEventListener('click', onOutside, true), 150);
+  }
+
+  function _closeDialog() {
+    const dlg = document.getElementById('ophelia-ask-dialog');
+    if (dlg) dlg.remove();
+  }
+
+  // ── Core: scan → plan → hand off to player ────────────────────────────────
+
+  async function _processRequest(request) {
+    _active = true;
+    _userRequest = request;
+
+    notify('🔍 Scanning page…', 'info');
+    const ctx = scanPage();
+
+    notify('🤖 Building your guide…', 'info');
+    const plan = await generatePlan(request, ctx);
+
+    if (!plan?.steps?.length) {
+      notify(plan?.message || 'Could not plan steps for that on this page. Try rephrasing.', 'error');
+      _active = false;
+      return;
     }
 
-    if (_active) {
-      speak('Done! Task complete.');
-      notify('✅ Done!', 'success');
-      _reset();
-    }
+    console.log(`✅ Assistant plan: ${plan.steps.length} step(s)`);
+
+    // Save for cross-page resume
+    chrome.storage.local.set({ [ASSIST_KEY]: { steps: plan.steps, stepIndex: 0, userRequest: request } });
+
+    // Hand off entirely to the player — same overlay, TTS, ✏️ correct, navigation handling
+    await window.OpheliaPlayer.playSteps(plan.steps);
+
+    chrome.storage.local.remove(ASSIST_KEY);
+    _active = false;
   }
 
   // ── Page scanning ──────────────────────────────────────────────────────────
-  // Returns URL, title, and all visible/near-visible interactive elements.
 
   function scanPage() {
     const SEL = [
@@ -257,146 +295,37 @@ window.OpheliaAssistant = (() => {
   }
 
   // ── Cross-page resumption ──────────────────────────────────────────────────
+  // When a navigation happens mid-session, player.js pre-saves PLAY_KEY and resumes.
+  // ASSIST_KEY is a secondary backup; if player didn't pre-save, we re-plan here.
 
-  function checkForPending() {
-    chrome.storage.local.get([ASSIST_KEY], result => {
+  function _checkForPending() {
+    chrome.storage.local.get([ASSIST_KEY], async result => {
       const p = result[ASSIST_KEY];
-      if (p?.steps?.length) {
-        console.log(`🔄 Assistant resuming from step ${p.stepIndex + 1}`);
+      if (!p?.steps?.length) return;
+      // Player already handles PLAY_KEY resume; only act if player has nothing
+      chrome.storage.local.get(['opheliaTutorial'], r2 => {
+        if (r2.opheliaTutorial?.steps?.length) return; // player will handle it
+        console.log('🔄 Assistant resume (fallback)');
         chrome.storage.local.remove(ASSIST_KEY);
         _active = true;
         _userRequest = p.userRequest || '';
-        window.opheliaTutorialActive = true;
-        waitForDOMStable(800).then(async () => {
-          // Re-plan remaining steps now that we're on a new page
-          notify('Adapting plan to new page…', 'info');
-          const updated = await replan(_userRequest, p.steps.slice(p.stepIndex), scanPage());
-          const steps   = updated?.length
-            ? [...p.steps.slice(0, p.stepIndex), ...updated]
-            : p.steps;
-          runSteps(steps, p.stepIndex);
-        });
-      }
+        window.OpheliaPlayer.playSteps(p.steps.slice(p.stepIndex));
+      });
     });
-  }
-
-  // ── Element finder — delegates to player's full 8-tier matcher ─────────────
-
-  function findEl(d) {
-    if (window.OpheliaPlayer?.findElement) return window.OpheliaPlayer.findElement(d);
-    if (!d) return null;
-    // Minimal fallback (player.js should always be present)
-    if (d.aria_label) {
-      const el = document.querySelector(`[aria-label="${d.aria_label}"]`);
-      if (el && _visible(el)) return el;
-    }
-    if (d.text_content || d.label) {
-      const t = (d.text_content || d.label).toLowerCase();
-      const sel = 'button,a,[role="menuitem"],[role="option"],[role="tab"],[role="button"]';
-      return [...document.querySelectorAll(sel)].find(e =>
-        _visible(e) && (e.textContent || '').trim().toLowerCase() === t
-      ) || null;
-    }
-    return null;
-  }
-
-  // ── Element capture (for corrections) ─────────────────────────────────────
-
-  function captureElement(el) {
-    try {
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) return null;
-      const aria    = el.getAttribute('aria-label') || '';
-      const ownText = [...el.childNodes]
-        .filter(n => n.nodeType === Node.TEXT_NODE)
-        .map(n => n.textContent.trim()).filter(Boolean)
-        .join(' ').replace(/\s+/g, ' ').substring(0, 80);
-      const fullText = (el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
-      const text  = ownText || fullText;
-      return {
-        tag:          el.tagName.toLowerCase(),
-        id:           (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
-        aria_label:   aria || null,
-        data_testid:  el.getAttribute('data-testid') || null,
-        text_content: text || null,
-        role:         el.getAttribute('role') || null,
-        label:        aria || text || el.tagName.toLowerCase(),
-        pos: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
-      };
-    } catch (_) { return null; }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-
-  function _visible(el) {
-    const r = el.getBoundingClientRect(), cs = window.getComputedStyle(el);
-    return cs.display !== 'none' && cs.visibility !== 'hidden' &&
-           parseFloat(cs.opacity) > 0 && r.width > 0 && r.height > 0;
-  }
-
-  function waitForInteraction() {
-    return new Promise(resolve => {
-      const startUrl = location.href;
-      let done = false;
-      const finish = () => {
-        if (done) return; done = true;
-        document.removeEventListener('click', onClick, true);
-        clearInterval(poll);
-        resolve();
-      };
-      const onClick = () => { if (window.opheliaCorrectionMode) return; finish(); };
-      const poll = setInterval(() => { if (location.href !== startUrl) finish(); }, 200);
-      document.addEventListener('click', onClick, true);
-    });
-  }
-
-  function waitForDOMStable(quietMs = 500) {
-    return new Promise(resolve => {
-      let t;
-      const obs = new MutationObserver(() => { clearTimeout(t); t = setTimeout(done, quietMs); });
-      const done = () => { obs.disconnect(); resolve(); };
-      obs.observe(document.body, { childList: true, subtree: true });
-      t = setTimeout(done, quietMs);
-    });
-  }
-
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function speak(text) {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 1.05; utt.pitch = 1.0; utt.volume = 1.0;
-    const doSpeak = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const pref = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Samantha')))
-                || voices.find(v => v.lang.startsWith('en'));
-      if (pref) utt.voice = pref;
-      window.speechSynthesis.speak(utt);
-    };
-    window.speechSynthesis.getVoices().length > 0 ? doSpeak()
-      : (window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.onvoiceschanged = null; doSpeak(); });
-  }
-
-  function stopSpeaking() { window.speechSynthesis?.cancel(); }
-
-  function _reset() {
-    _active = false;
-    window.opheliaTutorialActive = false;
-    window.OpheliaOverlay.hide();
-  }
 
   function notify(msg, type) {
     if (typeof window.OpheliaNotify === 'function') window.OpheliaNotify(msg, type);
     else console.log(`[Assistant][${type}] ${msg}`);
   }
 
-  // Auto-resume on every page load
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', checkForPending);
+    document.addEventListener('DOMContentLoaded', _checkForPending);
   } else {
-    checkForPending();
+    _checkForPending();
   }
 
-  return { ask, stop, isActive, checkForPending };
+  return { activate, stop, isActive };
 })();

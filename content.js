@@ -6,8 +6,6 @@
   let sttActive             = false;
   let isListening           = false;
   let _justStoppedRecording = false; // grace-period flag to silence tutor TTS
-  let _askMode              = false; // waiting for user to speak a request to the assistant
-  let _justHandledAsk       = false; // blocks stray STT results after ask-mode fires
 
   // ── Gemini tutor state ───────────────────────────────────────────────────
   let geminiConfig = null;
@@ -65,7 +63,8 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg.action) {
       case 'toggleSphere':
-        handleSphereClick();
+        // Ctrl+Shift+U → open the AI assistant dialog
+        window.OpheliaAssistant?.activate();
         sendResponse({ success: true });
         break;
 
@@ -138,7 +137,7 @@
   }
 
   function handleSphereClick() {
-    // During recording → stop
+    // Sphere click: stop recording if active, otherwise open assistant
     if (window.OpheliaRecorder.isActive()) {
       stopSTT();
       window.OpheliaRecorder.stop();
@@ -146,29 +145,7 @@
       setTimeout(() => { _justStoppedRecording = false; }, 3000);
       return;
     }
-    // Assistant running → stop
-    if (window.OpheliaAssistant?.isActive()) {
-      window.OpheliaAssistant.stop();
-      _askMode = false;
-      stopSTT();
-      return;
-    }
-    // Toggle ask-mode: sphere turns blue, next speech fires the assistant
-    if (_askMode) {
-      _askMode = false;
-      stopSTT();
-      _setSphereColor('#ff7a1a');
-      return;
-    }
-    _askMode = true;
-    startSTT();
-    _setSphereColor('#4285f4');
-    window.OpheliaNotify('💬 What do you need help with? Speak now…', 'info');
-  }
-
-  function _setSphereColor(color) {
-    const sphere = document.getElementById('cross-tab-sphere');
-    if (sphere) sphere.style.background = color;
+    window.OpheliaAssistant?.activate();
   }
 
   function setupMouseFollowing(sphere) {
@@ -242,24 +219,8 @@
       // Always push to recorder buffer (no-op if not recording)
       window.OpheliaRecorder.pushSpeech(final);
 
-      // Route speech to the right consumer
-      if (window.OpheliaRecorder.isActive()) {
-        // already pushed above
-      } else if (_askMode) {
-        // First speech in ask-mode → fire the assistant, exit ask-mode
-        _askMode = false;
-        _justHandledAsk = true;
-        setTimeout(() => { _justHandledAsk = false; }, 3000);
-        stopSTT();
-        _setSphereColor('#ff7a1a');
-        if (window.OpheliaAssistant) {
-          window.OpheliaAssistant.ask(final);
-        } else {
-          window.OpheliaNotify('Assistant not ready — try again', 'error');
-        }
-      } else if (!_justStoppedRecording && !_justHandledAsk && !window.OpheliaAssistant?.isActive()) {
-        sendToTutor(final);
-      }
+      // STT is now only used during recording (speech attached to each step)
+      if (!window.OpheliaRecorder.isActive()) stopSTT();
     };
 
     recognition.onerror = (e) => {

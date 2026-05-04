@@ -473,5 +473,8 @@ window.OpheliaPlayer = (() => {
     checkForPending();
   }
 
-  return { loadAndStart, checkForPending, stop, findElement };
+  // playSteps: entry point for AI-generated plans (no sessionId, corrections keyed to null)
+  function playSteps(steps) { return play(steps, 0, null); }
+
+  return { loadAndStart, checkForPending, stop, findElement, playSteps };
 })();
