@@ -843,6 +843,12 @@
     try {
       console.log('🤖 Processing session with Gemini API via Cloudflare Worker...');
       
+      // Check if geminiConfig is available
+      if (!geminiConfig) {
+        console.log('⚠️ Gemini config not initialized, skipping tutorial generation');
+        return;
+      }
+      
       // Extract STT results and steps
       let sttResults = [];
       const sessionEndStep = sessionData.steps.find(step => step.type === 'session_end');
