@@ -159,10 +159,16 @@ async function loadTutorial(request, apiKey, projectId) {
     
     const data = await response.json();
     
-    // Get the first matching document
+    // Get the first matching document - Firebase structured query returns different format
     let tutorial = null;
-    if (data && data.length > 0 && data[0].document) {
-      tutorial = data[0].document;
+    if (data && data.length > 0) {
+      // Check if the first element has a document property
+      if (data[0].document) {
+        tutorial = data[0].document;
+      } else {
+        // The document might be directly in the array
+        tutorial = data[0];
+      }
     }
     
     return new Response(JSON.stringify({ 
@@ -171,7 +177,8 @@ async function loadTutorial(request, apiKey, projectId) {
         sessionId, 
         query: requestBody,
         responseLength: data.length,
-        found: !!tutorial
+        found: !!tutorial,
+        firstElement: data[0] ? Object.keys(data[0]) : []
       } 
     }), {
       headers: {

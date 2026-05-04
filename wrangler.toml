@@ -5,3 +5,8 @@ compatibility_date = "2024-01-01"
 [vars]
 # Environment variables will be set in Cloudflare dashboard
 # GEMINI_API_KEY = "your-gemini-api-key"
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
