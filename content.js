@@ -607,17 +607,34 @@
   
   // Save session state to storage
   function saveSessionState() {
-    const sessionState = {
-      sessionActive: sessionActive,
-      sessionStartTime: sessionStartTime,
-      sessionSteps: sessionSteps
-    };
-    chrome.storage.local.set({ 'opheliaSession': sessionState });
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        const sessionState = {
+          sessionActive: sessionActive,
+          sessionStartTime: sessionStartTime,
+        };
+        chrome.storage.local.set({ 'opheliaSession': sessionState });
+      }
+    } catch (error) {
+      // Ignore extension context invalidated errors
+      if (error.message !== 'Extension context invalidated') {
+        console.error('❌ Failed to save session state:', error);
+      }
+    }
   }
   
   // Clear session state from storage
   function clearSessionState() {
-    chrome.storage.local.remove('opheliaSession');
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        chrome.storage.local.remove('opheliaSession');
+      }
+    } catch (error) {
+      // Ignore extension context invalidated errors
+      if (error.message !== 'Extension context invalidated') {
+        console.error('❌ Failed to clear session state:', error);
+      }
+    }
   }
   
   // Check for existing session on tab load
