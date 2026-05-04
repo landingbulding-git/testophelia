@@ -19,9 +19,21 @@ chrome.commands.onCommand.addListener((command) => {
     // Get active tab and send message to send data to Firebase
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { action: 'sendFirebase' })
-          .then(() => console.log('✅ Firebase send message sent'))
-          .catch(err => console.error('❌ Failed to send Firebase message:', err));
+        // Check if content script is loaded, if not inject it
+        chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id },
+          files: ['gemini-config.js', 'agent-prompt.js', 'gemini-tutor.js', 'content.js']
+        }).then(() => {
+          // Content script injected, now send message
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'sendFirebase' })
+            .then(() => console.log('✅ Firebase send message sent'))
+            .catch(err => console.error('❌ Failed to send Firebase message:', err));
+        }).catch(() => {
+          // Script might already be loaded, try sending message directly
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'sendFirebase' })
+            .then(() => console.log('✅ Firebase send message sent'))
+            .catch(err => console.error('❌ Failed to send Firebase message:', err));
+        });
       }
     });
   }
