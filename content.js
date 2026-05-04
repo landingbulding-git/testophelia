@@ -1123,20 +1123,18 @@ Example output format:
         // Get element data from step (handle different structures)
         const elementData = step.dom_element || step;
         
-        // Get element ID from recording
-        const elementId = elementData.id;
-        if (!elementId) {
-          console.warn('⚠️ Step has no element ID, skipping:', step);
-          continue;
-        }
-        
-        console.log('🔍 Looking for element ID:', elementId);
+        // Use label, tag, and position to find element (injected IDs won't exist on user's page)
+        console.log('🔍 Looking for element with:', {
+          label: elementData.label,
+          tag: elementData.tag,
+          position: elementData.position
+        });
         
         // Wait a bit for DOM to be ready
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // Find element in current DOM by ID
-        const element = document.getElementById(elementId);
+        // Find element by label, tag, and position
+        const element = await findElementByAttributes(elementData);
         
         if (element) {
           console.log('✅ Found element in DOM:', element);
@@ -1168,8 +1166,8 @@ Example output format:
           
           console.log('✅ User interacted, moving to next step');
         } else {
-          console.warn('⚠️ Element not found in DOM:', elementId);
-          showSTTNotification(`Could not find element: ${elementId}`, 'warning');
+          console.warn('⚠️ Element not found in DOM with attributes:', elementData);
+          showSTTNotification(`Could not find element: ${elementData.label}`, 'warning');
           
           // Wait anyway before moving to next step
           await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1185,23 +1183,14 @@ Example output format:
     }
   }
   
-  // Find matching element in current DOM
-  async function findMatchingElement(elementData) {
-    console.log('🔍 Finding matching element:', elementData);
+  // Find element by label, tag, and position (instead of injected ID)
+  async function findElementByAttributes(elementData) {
+    console.log('🔍 Finding element by attributes:', elementData);
     
     let element = null;
     
-    // Try to find element by ID
-    if (elementData.id) {
-      element = document.getElementById(elementData.id);
-      if (element) {
-        console.log('✅ Found element by ID:', elementData.id);
-        return element;
-      }
-    }
-    
-    // Try to find by label/text content (avoid HTML/BODY elements)
-    if (!element && elementData.label) {
+    // Try to find by label/text content first
+    if (elementData.label) {
       const elements = document.querySelectorAll('*');
       for (const el of elements) {
         // Skip HTML and BODY elements
@@ -1210,6 +1199,11 @@ Example output format:
         }
         
         if (el.textContent && el.textContent.includes(elementData.label)) {
+          // Check if tag matches if provided
+          if (elementData.tag && el.tagName.toLowerCase() !== elementData.tag.toLowerCase()) {
+            continue;
+          }
+          
           element = el;
           console.log('✅ Found element by label:', elementData.label, el.tagName);
           break;
@@ -1217,13 +1211,13 @@ Example output format:
       }
     }
     
-    // Try to find by tag and position
+    // If not found by label, try by tag and position
     if (!element && elementData.tag && elementData.position) {
       const elements = document.getElementsByTagName(elementData.tag);
       for (const el of elements) {
         const rect = el.getBoundingClientRect();
-        if (Math.abs(rect.left - elementData.position.x) < 50 && 
-            Math.abs(rect.top - elementData.position.y) < 50) {
+        if (Math.abs(rect.left - elementData.position.x) < 100 && 
+            Math.abs(rect.top - elementData.position.y) < 100) {
           element = el;
           console.log('✅ Found element by tag and position:', elementData.tag);
           break;
