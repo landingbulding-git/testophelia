@@ -1,7 +1,14 @@
 // Ophelia Overlay - Tutorial UI: instruction card, progress, pulsing dot, target highlight
 window.OpheliaOverlay = (() => {
   const STYLE_ID = 'ophelia-overlay-css';
-  let _currentTarget = null;
+  let _currentTarget      = null;
+  let _currentInstruction = '';
+  let _onCorrect          = null;
+  let _corrMouseHandler   = null;
+  let _corrClickHandler   = null;
+  let _corrHovered        = null;
+
+  // ── Styles ────────────────────────────────────────────────────────────────
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -37,6 +44,30 @@ window.OpheliaOverlay = (() => {
         text-transform: uppercase;
         color: #ff7a1a;
         margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #ophelia-correct-btn {
+        pointer-events: auto;
+        cursor: pointer;
+        background: transparent;
+        border: 1px solid rgba(255,122,26,0.45);
+        border-radius: 5px;
+        color: #ff7a1a;
+        font-size: 10px;
+        font-family: inherit;
+        padding: 1px 7px;
+        margin-left: auto;
+        opacity: 0.7;
+        transition: opacity 0.15s, background 0.15s;
+        flex-shrink: 0;
+      }
+      #ophelia-correct-btn:hover { opacity: 1; background: rgba(255,122,26,0.15); }
+      #ophelia-correct-btn.active {
+        opacity: 1;
+        background: rgba(255,122,26,0.2);
+        border-color: #ff7a1a;
       }
       #ophelia-instruction-text {
         font-size: 14px;
@@ -69,9 +100,9 @@ window.OpheliaOverlay = (() => {
         transition: left 0.35s cubic-bezier(0.4,0,0.2,1), top 0.35s cubic-bezier(0.4,0,0.2,1);
       }
       @keyframes opheliaDotPulse {
-        0%   { box-shadow: 0 0 0 0   rgba(255,122,26,0.6); }
+        0%   { box-shadow: 0 0 0 0    rgba(255,122,26,0.6); }
         70%  { box-shadow: 0 0 0 14px rgba(255,122,26,0); }
-        100% { box-shadow: 0 0 0 0   rgba(255,122,26,0); }
+        100% { box-shadow: 0 0 0 0    rgba(255,122,26,0); }
       }
       .ophelia-target {
         outline: 3px solid #ff7a1a !important;
@@ -82,23 +113,35 @@ window.OpheliaOverlay = (() => {
         z-index: 2147483645 !important;
       }
       @keyframes opheliaTargetGlow {
-        0%, 100% { box-shadow: 0 0 0  0   rgba(255,122,26,0.4); }
-        50%       { box-shadow: 0 0 14px 4px rgba(255,122,26,0.25); }
+        0%, 100% { box-shadow: 0 0 0  0    rgba(255,122,26,0.4); }
+        50%      { box-shadow: 0 0 14px 4px rgba(255,122,26,0.25); }
+      }
+      .ophelia-correct-hover {
+        outline: 2px dashed #ff7a1a !important;
+        outline-offset: 3px !important;
+        cursor: crosshair !important;
       }
     `;
     document.head.appendChild(s);
   }
 
-  function show({ stepNumber, totalSteps, instruction, element }) {
+  // ── Public API ────────────────────────────────────────────────────────────
+
+  function show({ stepNumber, totalSteps, instruction, element, onCorrect }) {
     ensureStyles();
     hide();
 
-    const pct = Math.round((stepNumber / totalSteps) * 100);
+    _currentInstruction = instruction;
+    _onCorrect = onCorrect || null;
 
+    const pct  = Math.round((stepNumber / totalSteps) * 100);
     const card = document.createElement('div');
-    card.id = 'ophelia-card';
+    card.id    = 'ophelia-card';
     card.innerHTML =
-      `<div id="ophelia-step-label">Step ${stepNumber} of ${totalSteps}</div>` +
+      `<div id="ophelia-step-label">` +
+        `<span>Step ${stepNumber} of ${totalSteps}</span>` +
+        (onCorrect ? `<button id="ophelia-correct-btn" title="Drag the pointer to the right element">✏️ Correct</button>` : '') +
+      `</div>` +
       `<div id="ophelia-instruction-text">${esc(instruction)}</div>` +
       `<div id="ophelia-progress-track"><div id="ophelia-progress-fill" style="width:${pct}%"></div></div>`;
     document.body.appendChild(card);
@@ -108,6 +151,20 @@ window.OpheliaOverlay = (() => {
     document.body.appendChild(dot);
 
     if (element) pinTo(element);
+
+    // Wire correction button
+    const btn = document.getElementById('ophelia-correct-btn');
+    if (btn) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        if (window.opheliaCorrectionMode) {
+          _exitCorrectionMode(false); // cancel
+        } else {
+          _enterCorrectionMode();
+        }
+      });
+    }
   }
 
   function pinTo(element) {
@@ -117,6 +174,83 @@ window.OpheliaOverlay = (() => {
     _moveDot(element);
   }
 
+  function hide() {
+    _exitCorrectionMode(false);
+    document.getElementById('ophelia-card')?.remove();
+    document.getElementById('ophelia-dot')?.remove();
+    if (_currentTarget) { _currentTarget.classList.remove('ophelia-target'); _currentTarget = null; }
+  }
+
+  // ── Correction mode ───────────────────────────────────────────────────────
+
+  function _enterCorrectionMode() {
+    window.opheliaCorrectionMode = true;
+
+    const instrEl = document.getElementById('ophelia-instruction-text');
+    const btn     = document.getElementById('ophelia-correct-btn');
+    if (instrEl) instrEl.innerHTML = '<span style="color:#ffa06a">👆 Click the correct element on the page…</span>';
+    if (btn)     { btn.textContent = '✕ Cancel'; btn.classList.add('active'); }
+
+    // Temporarily remove the glow so user can see what they're hovering
+    if (_currentTarget) _currentTarget.classList.remove('ophelia-target');
+
+    _corrMouseHandler = (e) => {
+      const el = e.target;
+      if (el.closest('#ophelia-card') || el.closest('#ophelia-dot')) return;
+      if (_corrHovered && _corrHovered !== el) _corrHovered.classList.remove('ophelia-correct-hover');
+      el.classList.add('ophelia-correct-hover');
+      _corrHovered = el;
+    };
+
+    _corrClickHandler = (e) => {
+      const el = e.target;
+      // Cancel button click
+      if (el.id === 'ophelia-correct-btn') return;
+      // Clicks on our own UI — ignore
+      if (el.closest('#ophelia-card') || el.closest('#ophelia-dot')) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      if (_corrHovered) _corrHovered.classList.remove('ophelia-correct-hover');
+      _corrHovered = null;
+
+      _exitCorrectionMode(true, el);
+    };
+
+    document.addEventListener('mouseover', _corrMouseHandler, true);
+    document.addEventListener('click',     _corrClickHandler, true);
+  }
+
+  function _exitCorrectionMode(accepted, correctedEl) {
+    if (!window.opheliaCorrectionMode && !_corrMouseHandler) return;
+    window.opheliaCorrectionMode = false;
+
+    if (_corrMouseHandler) { document.removeEventListener('mouseover', _corrMouseHandler, true); _corrMouseHandler = null; }
+    if (_corrClickHandler) { document.removeEventListener('click',     _corrClickHandler, true); _corrClickHandler = null; }
+    if (_corrHovered)      { _corrHovered.classList.remove('ophelia-correct-hover'); _corrHovered = null; }
+
+    const instrEl = document.getElementById('ophelia-instruction-text');
+    const btn     = document.getElementById('ophelia-correct-btn');
+
+    if (accepted && correctedEl) {
+      // Re-pin dot to new element
+      pinTo(correctedEl);
+      if (instrEl) instrEl.innerHTML = esc(_currentInstruction);
+      if (btn)     { btn.textContent = '✏️ Correct'; btn.classList.remove('active'); }
+      // Notify player
+      if (_onCorrect) _onCorrect(correctedEl);
+    } else {
+      // Cancelled — restore original highlight
+      if (_currentTarget) _currentTarget.classList.add('ophelia-target');
+      if (instrEl) instrEl.innerHTML = esc(_currentInstruction);
+      if (btn)     { btn.textContent = '✏️ Correct'; btn.classList.remove('active'); }
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
   function _moveDot(element) {
     const dot = document.getElementById('ophelia-dot');
     if (!dot || !element) return;
@@ -125,21 +259,10 @@ window.OpheliaOverlay = (() => {
     dot.style.top  = `${r.top  + r.height / 2}px`;
   }
 
-  function hide() {
-    document.getElementById('ophelia-card')?.remove();
-    document.getElementById('ophelia-dot')?.remove();
-    if (_currentTarget) {
-      _currentTarget.classList.remove('ophelia-target');
-      _currentTarget = null;
-    }
-  }
-
   function esc(str) {
     return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   return { show, hide, pinTo };

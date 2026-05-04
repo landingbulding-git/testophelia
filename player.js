@@ -1,6 +1,7 @@
 // Ophelia Player - Guided tutorial playback with 5-tier element finding and DOM stability detection
 window.OpheliaPlayer = (() => {
   const PLAY_KEY  = 'opheliaTutorial';
+  const CORR_KEY  = 'opheliaCorrections'; // user-supplied corrections per session+step
   const FB_WORKER = 'https://ophelia-firebase-worker.norbertb-consulting.workers.dev';
 
   let _playing = false;
@@ -26,12 +27,12 @@ window.OpheliaPlayer = (() => {
 
       // If we're not already on the right page, navigate first
       if (startUrl && window.location.href !== startUrl) {
-        chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: 0 } });
+        chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: 0, sessionId } });
         chrome.runtime.sendMessage({ action: 'navigate', url: startUrl });
         return;
       }
 
-      await play(steps, 0);
+      await play(steps, 0, sessionId);
 
     } catch (err) {
       console.error('❌ Tutorial load failed:', err);
@@ -48,16 +49,19 @@ window.OpheliaPlayer = (() => {
         console.log(`🔄 Resuming tutorial from step ${pending.stepIndex + 1}/${pending.steps.length}`);
         chrome.storage.local.remove(PLAY_KEY);
         // Wait for DOM to be ready and stable before starting
-        waitForDOMStable(800).then(() => play(pending.steps, pending.stepIndex));
+        waitForDOMStable(800).then(() => play(pending.steps, pending.stepIndex, pending.sessionId || null));
       }
     });
   }
 
   // ── Main playback loop ────────────────────────────────────────────────────
 
-  async function play(steps, startIndex = 0) {
+  async function play(steps, startIndex = 0, sessionId = null) {
     _playing = true;
     window.opheliaTutorialActive = true; // Tells content.js to stop sphere mouse-following
+
+    // Load any user corrections saved for this tutorial
+    const _corrections = await loadCorrections(sessionId);
 
     for (let i = startIndex; i < steps.length; i++) {
       if (!_playing) break;
@@ -72,13 +76,23 @@ window.OpheliaPlayer = (() => {
       // Let the DOM settle before searching
       await waitForDOMStable(600);
 
-      // Find element — up to 3 attempts with 1.5s between each
+      // T0: use a saved correction for this step (highest priority)
       let el = null;
-      for (let attempt = 0; attempt < 3 && !el; attempt++) {
-        el = findElement(elData);
-        if (!el && attempt < 2) {
-          console.log(`   ↳ Attempt ${attempt + 1} failed, retrying…`);
-          await sleep(1500);
+      const savedCorr = _corrections[i];
+      if (savedCorr?.element) {
+        el = findElement(savedCorr.element);
+        if (el) console.log(`  ✅ T0 correction (saved by user)`);
+        else    console.log(`  ⚠️ T0 correction element not found, falling back`);
+      }
+
+      // Normal element finding if no correction or correction element not found
+      if (!el) {
+        for (let attempt = 0; attempt < 3 && !el; attempt++) {
+          el = findElement(elData);
+          if (!el && attempt < 2) {
+            console.log(`   ↳ Attempt ${attempt + 1} failed, retrying…`);
+            await sleep(1500);
+          }
         }
       }
 
@@ -89,8 +103,18 @@ window.OpheliaPlayer = (() => {
       // and any set() call after the click would never run. Pre-saving guarantees
       // the new page always has something to resume from.
       if (!isLast) {
-        await chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: i + 1 } });
+        await chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: i + 1, sessionId } });
       }
+
+      // Correction callback — called by overlay when user picks a different element
+      const onCorrect = (correctedEl) => {
+        const elInfo = captureElement(correctedEl);
+        if (!elInfo) return;
+        _corrections[i] = { element: elInfo, savedAt: Date.now() };
+        if (sessionId) saveCorrection(sessionId, i, elInfo);
+        console.log(`✏️  Correction saved for step ${i + 1}: "${elInfo.label}"`);
+        notify(`Correction saved for step ${i + 1}`, 'success');
+      };
 
       if (!el) {
         console.warn(`⚠️  Step ${i + 1}: element not found after 3 attempts`);
@@ -98,7 +122,7 @@ window.OpheliaPlayer = (() => {
           `Step ${i + 1}: Couldn't find the element. Please do this manually:\n"${instruction}"`,
           'error'
         );
-        window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: null });
+        window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: null, onCorrect });
         await waitForAnyClick();
         window.OpheliaOverlay.hide();
         // Manual step done without navigation — clear the pre-saved state
@@ -110,10 +134,11 @@ window.OpheliaPlayer = (() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       await sleep(400);
 
-      window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: el });
+      window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: el, onCorrect });
       speak(instruction);
 
-      // Wait for any interaction (click OR programmatic URL change)
+      // Wait for any interaction (click OR programmatic URL change).
+      // waitForInteraction ignores clicks while opheliaCorrectionMode is active.
       await waitForInteraction();
       window.OpheliaOverlay.hide();
       stopSpeaking();
@@ -146,6 +171,60 @@ window.OpheliaPlayer = (() => {
     chrome.storage.local.remove(PLAY_KEY);
     stopSpeaking();
     notify('Tutorial stopped.', 'info');
+  }
+
+  // ── Correction storage ────────────────────────────────────────────────────
+
+  function loadCorrections(sessionId) {
+    return new Promise(resolve => {
+      if (!sessionId) return resolve({});
+      chrome.storage.local.get([CORR_KEY], result => {
+        resolve((result[CORR_KEY] || {})[sessionId] || {});
+      });
+    });
+  }
+
+  function saveCorrection(sessionId, stepIndex, elInfo) {
+    chrome.storage.local.get([CORR_KEY], result => {
+      const all = result[CORR_KEY] || {};
+      if (!all[sessionId]) all[sessionId] = {};
+      all[sessionId][stepIndex] = { element: elInfo, savedAt: Date.now() };
+      chrome.storage.local.set({ [CORR_KEY]: all });
+      console.log(`💾 Correction persisted: session=${sessionId}, step=${stepIndex + 1}`);
+    });
+  }
+
+  // ── Element capture (for corrections) ────────────────────────────────────
+  // Mirrors recorder.js extractElement — captures all matching signals from a live element.
+
+  function captureElement(el) {
+    try {
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const aria   = el.getAttribute('aria-label') || '';
+      const testId = el.getAttribute('data-testid') || '';
+      const ph     = el.getAttribute('placeholder') || '';
+      const ownText = [...el.childNodes]
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => n.textContent.trim()).filter(Boolean)
+        .join(' ').replace(/\s+/g, ' ').substring(0, 80);
+      const fullText = (el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
+      const text  = ownText || fullText;
+      const label = aria || testId || ph || text || el.tagName.toLowerCase();
+      return {
+        tag:         el.tagName.toLowerCase(),
+        id:          (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
+        aria_label:  aria   || null,
+        data_testid: testId || null,
+        text_content: text  || null,
+        role:        el.getAttribute('role') || null,
+        label,
+        pos: {
+          x: Math.round(rect.left + rect.width  / 2),
+          y: Math.round(rect.top  + rect.height / 2)
+        }
+      };
+    } catch (_) { return null; }
   }
 
   // ── Text-to-Speech ────────────────────────────────────────────────────────
@@ -350,7 +429,8 @@ window.OpheliaPlayer = (() => {
         resolve();
       };
 
-      const onClick = () => finish();
+      // Ignore clicks that happen while the user is in correction mode
+      const onClick = () => { if (window.opheliaCorrectionMode) return; finish(); };
       // Also resolve on programmatic navigation (no click involved)
       const navPoll = setInterval(() => { if (window.location.href !== startUrl) finish(); }, 200);
 
