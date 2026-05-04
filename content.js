@@ -96,6 +96,20 @@
     return true;
   });
 
+  // ── Direct keyboard shortcut (reliable fallback for chrome.commands) ─────
+  // chrome.commands → background → sendMessage can silently fail if the service
+  // worker is inactive or the message channel drops. A direct keydown listener
+  // always fires as long as the content script is loaded.
+
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+U  (Mac: Ctrl = MacCtrl = e.ctrlKey, not e.metaKey)
+    if (e.ctrlKey && e.shiftKey && (e.key === 'U' || e.key === 'u') && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.OpheliaAssistant?.activate();
+    }
+  }, true); // capture phase so it fires before page handlers
+
   // ── Init ──────────────────────────────────────────────────────────────────
 
   if (document.readyState === 'loading') {
