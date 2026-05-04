@@ -37,6 +37,7 @@ async function handleClaude(request, env) {
     max_tokens: body.max_tokens || 1500,
     messages:   body.messages
   };
+  if (body.system) claudeBody.system = body.system;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',

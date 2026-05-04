@@ -12,6 +12,7 @@ window.OpheliaAssistant = (() => {
   let _waitingForAction = false;
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
+  let _badgeEl = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ window.OpheliaAssistant = (() => {
     _cleanupFns.forEach(fn => fn());
     _cleanupFns = [];
     _clearHighlight();
-    window.OpheliaAgentPanel?.hide();
+    _hideBadge();
     window.speechSynthesis?.cancel();
     _goal = ''; _messages = []; _stepCount = 0;
   }
@@ -127,14 +128,8 @@ window.OpheliaAssistant = (() => {
     _active = true;
     _stepCount = 0;
 
-    window.OpheliaAgentPanel.show({
-      goal,
-      instruction: 'Looking at your page…',
-      onSkip: _skip,
-      onStop: stop,
-      onAsk:  _userMessage
-    });
-
+    _showBadge();
+    _setBadge('Starting…');
     _watchPage();
     await _analyze('What is the first step the user should take?');
   }
@@ -147,7 +142,7 @@ window.OpheliaAssistant = (() => {
     _waitingForAction = false;
     _clearHighlight();
 
-    window.OpheliaAgentPanel.setStatus('Thinking…');
+    _setBadge('Thinking…');
 
     // 1. Take screenshot (visual context)
     const screenshot = await _captureScreen();
@@ -176,7 +171,7 @@ window.OpheliaAssistant = (() => {
     const step = await _callClaude();
 
     if (!step) {
-      window.OpheliaAgentPanel.setStatus('Could not get a response — try again.');
+      _setBadge('No response — try again.');
       _waitingForAction = true;
       return;
     }
@@ -194,12 +189,7 @@ window.OpheliaAssistant = (() => {
     // 5a. Goal complete
     if (step.done) {
       _speak('Done! Your goal is complete.');
-      window.OpheliaAgentPanel.show({
-        goal: _goal,
-        instruction: '✅ ' + step.instruction,
-        onSkip: _skip, onStop: stop, onAsk: _userMessage
-      });
-      window.OpheliaAgentPanel.setStatus('Goal complete!');
+      _setBadge('✅ Done!');
       setTimeout(stop, 4000);
       return;
     }
@@ -208,12 +198,7 @@ window.OpheliaAssistant = (() => {
     const el = step.element ? _findEl(step.element) : null;
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); _highlightElement(el); }
 
-    window.OpheliaAgentPanel.show({
-      goal: _goal,
-      instruction: step.instruction,
-      onSkip: _skip, onStop: stop, onAsk: _userMessage
-    });
-    window.OpheliaAgentPanel.setStatus(`Step ${_stepCount}${el ? '' : ' — element not visible yet'}`);
+    _setBadge(`Step ${_stepCount}`);
     _speak(step.instruction);
 
     _waitingForAction = true;
@@ -236,9 +221,9 @@ window.OpheliaAssistant = (() => {
     const onClick = (e) => {
       if (!_active || !_waitingForAction) return;
       // Ignore clicks on our own panel
-      if (e.target.closest('#ophelia-agent-panel') || e.target.closest('#ophelia-ap-ask-row')) return;
+      if (e.target.closest('#ophelia-badge') || e.target.closest('#ophelia-ask-popup') || e.target.closest('#ophelia-goal-dlg')) return;
       _clearHighlight();
-      window.OpheliaAgentPanel.setStatus('Processing your action…');
+      _setBadge('Processing…');
       reanalyze('User just performed an action. What is the next step toward the goal?');
     };
 
@@ -246,7 +231,7 @@ window.OpheliaAssistant = (() => {
       if (!_active) { clearInterval(navPoll); return; }
       if (location.href !== lastUrl) {
         lastUrl = location.href;
-        window.OpheliaAgentPanel.setStatus('Page changed — re-analyzing…');
+        _setBadge('Page changed…');
         reanalyze('User navigated to a new page. What is the next step toward the goal?');
       }
     }, 300);
@@ -263,16 +248,14 @@ window.OpheliaAssistant = (() => {
   function _userMessage(text) {
     if (!_active) return;
     _clearHighlight();
-    // Add as a plain user text turn (no screenshot)
-    _messages.push({ role: 'user', content: text });
-    window.OpheliaAgentPanel.setStatus('Processing your message…');
-    _analyze(text);
+    _setBadge('Processing…');
+    // Inject user message into trigger — don't push separately (avoids consecutive user turns)
+    _analyze(`User says: "${text}". Take this into account for the next step.`);
   }
 
   function _skip() {
     if (!_active) return;
-    _messages.push({ role: 'user', content: 'Skip this step and tell me the next one.' });
-    _analyze('User wants to skip this step. What should they do next?');
+    _analyze('User skipped this step. What is the next step toward the goal?');
   }
 
   // ── Screenshot ──────────────────────────────────────────────────────────────
@@ -443,6 +426,90 @@ window.OpheliaAssistant = (() => {
       if (e.data_testid)  obj.data_testid  = e.data_testid;
       return `[${String(i).padStart(2)}] @${e.position}  ${JSON.stringify(obj)}`;
     }).join('\n');
+  }
+
+  // ── Minimal floating badge ───────────────────────────────────────────────────
+
+  function _showBadge() {
+    if (document.getElementById('ophelia-badge')) return;
+    const b = document.createElement('div');
+    b.id = 'ophelia-badge';
+    b.style.cssText = [
+      'position:fixed', 'top:14px', 'right:14px', 'z-index:2147483647',
+      'background:rgba(9,9,13,0.92)', 'border:1px solid rgba(66,133,244,0.4)',
+      'border-radius:20px', 'padding:5px 10px 5px 12px',
+      'display:flex', 'align-items:center', 'gap:8px',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      'font-size:12px', 'color:#ccc',
+      'backdrop-filter:blur(8px)', '-webkit-backdrop-filter:blur(8px)',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.55)', 'cursor:default'
+    ].join(';');
+    b.innerHTML =
+      '<span id="ophelia-badge-text">🤖</span>' +
+      '<button id="ophelia-badge-ask" title="Ask Ophelia" style="background:none;border:none;' +
+      'color:#666;cursor:pointer;font-size:12px;padding:0;line-height:1">💬</button>' +
+      '<button id="ophelia-badge-stop" title="Stop" style="background:none;border:none;' +
+      'color:#555;cursor:pointer;font-size:13px;padding:0;line-height:1">✕</button>';
+    document.body.appendChild(b);
+    _badgeEl = b;
+    b.querySelector('#ophelia-badge-stop').addEventListener('click', stop);
+    b.querySelector('#ophelia-badge-ask').addEventListener('click', _showAskPopup);
+  }
+
+  function _setBadge(text) {
+    if (!_badgeEl) _showBadge();
+    const el = document.getElementById('ophelia-badge-text');
+    if (el) el.textContent = `🤖 ${text}`;
+  }
+
+  function _hideBadge() {
+    document.getElementById('ophelia-badge')?.remove();
+    document.getElementById('ophelia-ask-popup')?.remove();
+    _badgeEl = null;
+  }
+
+  function _showAskPopup() {
+    document.getElementById('ophelia-ask-popup')?.remove();
+    const popup = document.createElement('div');
+    popup.id = 'ophelia-ask-popup';
+    popup.style.cssText = [
+      'position:fixed', 'top:48px', 'right:14px', 'z-index:2147483647',
+      'background:rgba(9,9,13,0.97)', 'border:1px solid rgba(66,133,244,0.35)',
+      'border-radius:12px', 'padding:12px',
+      'display:flex', 'gap:7px', 'align-items:center',
+      'box-shadow:0 8px 28px rgba(0,0,0,0.6)', 'width:280px',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'
+    ].join(';');
+    popup.innerHTML =
+      '<input id="ophelia-ask-txt" type="text" placeholder="Tell me something…"' +
+      ' style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);' +
+      'border-radius:7px;padding:7px 10px;color:#fff;font-size:13px;font-family:inherit;outline:none"/>' +
+      '<button id="ophelia-ask-mic" style="background:none;border:none;cursor:pointer;font-size:16px">🎤</button>' +
+      '<button id="ophelia-ask-send" style="background:#4285f4;border:none;border-radius:7px;' +
+      'padding:7px 12px;cursor:pointer;color:#fff;font-size:12px;font-weight:600;font-family:inherit">→</button>';
+    document.body.appendChild(popup);
+    const input = popup.querySelector('#ophelia-ask-txt');
+    input.focus();
+    const send = () => {
+      const t = input.value.trim();
+      if (!t) return;
+      popup.remove();
+      _userMessage(t);
+    };
+    popup.querySelector('#ophelia-ask-send').addEventListener('click', send);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); if (e.key === 'Escape') popup.remove(); });
+    let mic = null;
+    popup.querySelector('#ophelia-ask-mic').addEventListener('click', function() {
+      if (mic) { mic.stop(); mic = null; this.textContent = '🎤'; return; }
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+      mic = new SR();
+      mic.lang = 'en-US';
+      mic.onstart  = () => { this.textContent = '🔴'; };
+      mic.onresult = (e) => { input.value = [...e.results].map(r => r[0].transcript).join(''); };
+      mic.onend    = () => { this.textContent = '🎤'; if (input.value.trim()) send(); };
+      mic.start();
+    });
   }
 
   // ── TTS ─────────────────────────────────────────────────────────────────────
