@@ -82,16 +82,27 @@ window.OpheliaPlayer = (() => {
         }
       }
 
+      const isLast = (i + 1 >= steps.length);
+
+      // CRITICAL: Persist the NEXT step BEFORE showing the overlay.
+      // If the user's click navigates away, Chrome kills this page's JS immediately
+      // and any set() call after the click would never run. Pre-saving guarantees
+      // the new page always has something to resume from.
+      if (!isLast) {
+        await chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: i + 1 } });
+      }
+
       if (!el) {
         console.warn(`⚠️  Step ${i + 1}: element not found after 3 attempts`);
         notify(
           `Step ${i + 1}: Couldn't find the element. Please do this manually:\n"${instruction}"`,
           'error'
         );
-        // Show card without highlight, wait for ANY click before continuing
         window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: null });
         await waitForAnyClick();
         window.OpheliaOverlay.hide();
+        // Manual step done without navigation — clear the pre-saved state
+        if (!isLast) chrome.storage.local.remove(PLAY_KEY);
         continue;
       }
 
@@ -108,19 +119,20 @@ window.OpheliaPlayer = (() => {
       console.log(`✅  Step ${i + 1} complete (navigated: ${navigated})`);
 
       if (navigated) {
-        const next = i + 1;
-        if (next < steps.length) {
-          // Persist remaining steps so the new page picks them up
-          chrome.storage.local.set({ [PLAY_KEY]: { steps, stepIndex: next } });
-        }
-        return; // Stop here — new page's content script will resume
+        // PLAY_KEY is already set to next step — new page picks it up automatically
+        return;
       }
+
+      // Step completed without navigation — clear pre-saved state so a page
+      // refresh doesn't spuriously resume the tutorial
+      if (!isLast) chrome.storage.local.remove(PLAY_KEY);
     }
 
     // All steps complete
     _playing = false;
     window.opheliaTutorialActive = false;
     window.OpheliaOverlay.hide();
+    chrome.storage.local.remove(PLAY_KEY);
     notify('Tutorial complete! 🎉', 'success');
     console.log('🏁 Tutorial complete');
   }
@@ -227,10 +239,12 @@ window.OpheliaPlayer = (() => {
         resolve(navigated);
       };
 
-      // Any document click counts as the user completing the step
-      const onClick = () => setTimeout(() => finish(window.location.href !== startUrl), 300);
-      // Poll for URL changes (programmatic navigation)
-      const navPoll = setInterval(() => { if (window.location.href !== startUrl) finish(true); }, 300);
+      // Any document click counts as the user completing the step.
+      // We wait 500ms before checking the URL — gives the browser time to
+      // register hash changes, SPA router changes, and full page navigations.
+      const onClick = () => setTimeout(() => finish(window.location.href !== startUrl), 500);
+      // Poll every 200ms for URL changes caused by programmatic navigation
+      const navPoll = setInterval(() => { if (window.location.href !== startUrl) finish(true); }, 200);
 
       document.addEventListener('click', onClick, true);
     });
