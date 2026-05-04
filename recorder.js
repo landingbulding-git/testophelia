@@ -68,11 +68,13 @@ window.OpheliaRecorder = (() => {
       const label  = aria || testId || ph || text || el.tagName.toLowerCase();
 
       return {
-        tag:         el.tagName.toLowerCase(),
-        id:          (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
-        aria_label:  aria   || null,
-        data_testid: testId || null,
-        selector:    selectorPath(el),
+        tag:          el.tagName.toLowerCase(),
+        id:           (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
+        aria_label:   aria   || null,
+        data_testid:  testId || null,
+        text_content: text   || null,
+        role:         el.getAttribute('role') || null,
+        selector:     selectorPath(el),
         label,
         pos: {
           x: Math.round(rect.left + rect.width  / 2),

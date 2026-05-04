@@ -183,75 +183,146 @@ window.OpheliaPlayer = (() => {
     if (window.speechSynthesis) window.speechSynthesis.cancel();
   }
 
-  // ── 5-Tier element finder ────────────────────────────────────────────────
-  // T1: CSS selector path (most precise, recorded at capture time)
-  // T2: aria-label exact → partial (most stable on React/SPA)
-  // T3: data-testid
-  // T4: XPath text match in interactive tags
-  // T5: Spatial match within 100px
+  // ── Element finder ───────────────────────────────────────────────────────
+  // Strategy: exact stable IDs first, then text/label signals, then scored
+  // fallback, then spatial. CSS selectors are only trusted when they contain
+  // a reliable anchor (#id or [data-testid]) AND match the recorded label.
 
   function findElement(d) {
     if (!d) return null;
+    const tag   = d.tag   || '*';
+    const label = (d.label        || '').trim().toLowerCase();
+    const text  = (d.text_content || d.label || '').trim().toLowerCase();
 
-    // T1 — CSS selector path
+    // ── T1: aria-label exact ─────────────────────────────────────────────
+    if (d.aria_label) {
+      const el = document.querySelector(`[aria-label="${d.aria_label}"]`);
+      if (el && visible(el)) { log('T1 aria-label exact'); return el; }
+
+      // Partial aria-label on matching tag
+      const partial = [...document.querySelectorAll(`[aria-label]`)].find(e =>
+        visible(e) &&
+        e.tagName.toLowerCase() === tag &&
+        e.getAttribute('aria-label').toLowerCase().includes(d.aria_label.toLowerCase())
+      );
+      if (partial) { log('T1 aria-label partial+tag'); return partial; }
+    }
+
+    // ── T2: data-testid ──────────────────────────────────────────────────
+    if (d.data_testid) {
+      const el = document.querySelector(`[data-testid="${d.data_testid}"]`);
+      if (el && visible(el)) { log('T2 data-testid'); return el; }
+    }
+
+    // ── T3: anchored CSS selector (id or data-testid in path) + label check
+    if (d.selector && (d.selector.includes('#') || d.selector.includes('[data-testid'))) {
+      try {
+        const el = document.querySelector(d.selector);
+        if (el && visible(el) && labelMatches(el, text)) { log('T3 anchored selector'); return el; }
+      } catch (_) {}
+    }
+
+    // ── T4: exact text content + tag ─────────────────────────────────────
+    // Most reliable for menu items, buttons, links.
+    if (text && tag !== '*') {
+      const candidates = [...document.querySelectorAll(tag)].filter(visible);
+
+      // Exact text match
+      const exact = candidates.find(e =>
+        cleanText(e) === text
+      );
+      if (exact) { log('T4 text+tag exact'); return exact; }
+
+      // Text starts with our label (handles "Settings • 3 notifications" type text)
+      const starts = candidates.find(e => cleanText(e).startsWith(text));
+      if (starts) { log('T4 text+tag starts-with'); return starts; }
+    }
+
+    // ── T5: text match across all interactive elements ────────────────────
+    if (text) {
+      const INTERACTIVE = 'a,button,input,[role="menuitem"],[role="option"],[role="tab"],[role="button"],[role="link"],li,span';
+      const all = [...document.querySelectorAll(INTERACTIVE)].filter(visible);
+
+      const exact = all.find(e => cleanText(e) === text);
+      if (exact) { log('T5 interactive text exact'); return exact; }
+
+      const starts = all.find(e => cleanText(e).startsWith(text) && cleanText(e).length < text.length + 30);
+      if (starts) { log('T5 interactive text starts-with'); return starts; }
+    }
+
+    // ── T6: scored matching across interactive elements ───────────────────
+    // Picks the highest-scoring visible element using all available signals.
+    {
+      const INTERACTIVE = 'a,button,input,select,textarea,[role="menuitem"],[role="option"],[role="tab"],[role="button"],[role="link"],li';
+      let best = null, bestScore = 0;
+
+      for (const el of document.querySelectorAll(INTERACTIVE)) {
+        if (!visible(el)) continue;
+        const s = score(el, d, text, label, tag);
+        if (s > bestScore) { bestScore = s; best = el; }
+      }
+
+      // Require at least 2 signals to agree before accepting
+      if (best && bestScore >= 2) { log(`T6 scored (${bestScore}pts)`); return best; }
+    }
+
+    // ── T7: generic CSS selector (last-resort, no label check) ───────────
     if (d.selector) {
       try {
         const el = document.querySelector(d.selector);
-        if (el && visible(el)) { console.log('  ✅ T1 selector'); return el; }
-      } catch (_) { /* invalid selector */ }
-      console.log('  ⏭️  T1 selector: no match');
+        if (el && visible(el)) { log('T7 generic selector fallback'); return el; }
+      } catch (_) {}
     }
 
-    // T2 — aria-label (exact, then partial)
-    if (d.aria_label) {
-      const exact = document.querySelector(`[aria-label="${d.aria_label}"]`);
-      if (exact && visible(exact)) { console.log('  ✅ T2 aria-label exact'); return exact; }
-
-      const partial = [...document.querySelectorAll('[aria-label]')].find(el =>
-        el.getAttribute('aria-label').toLowerCase().includes(d.aria_label.toLowerCase()) && visible(el)
-      );
-      if (partial) { console.log('  ✅ T2 aria-label partial'); return partial; }
-      console.log('  ⏭️  T2 aria-label: no match');
-    }
-
-    // T3 — data-testid
-    if (d.data_testid) {
-      const el = document.querySelector(`[data-testid="${d.data_testid}"]`);
-      if (el && visible(el)) { console.log('  ✅ T3 data-testid'); return el; }
-      console.log('  ⏭️  T3 data-testid: no match');
-    }
-
-    // T4 — XPath text match in interactive tags
-    if (d.label) {
-      const lc = d.label.toLowerCase().replace(/'/g, "\\'");
-      for (const tag of ['button', 'a', 'input', 'span', 'div']) {
-        try {
-          const xp  = `//${tag}[normalize-space(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'))='${lc}']`;
-          const res = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-          const el  = res.singleNodeValue;
-          if (el && visible(el)) { console.log(`  ✅ T4 XPath <${tag}>`); return el; }
-        } catch (_) { /* bad xpath */ }
-      }
-      console.log('  ⏭️  T4 XPath: no match');
-    }
-
-    // T5 — Spatial (100px radius)
-    if (d.pos && d.tag) {
-      for (const el of document.getElementsByTagName(d.tag)) {
+    // ── T8: spatial (100px radius) ────────────────────────────────────────
+    if (d.pos && tag !== '*') {
+      for (const el of document.getElementsByTagName(tag)) {
         if (!visible(el)) continue;
-        const r  = el.getBoundingClientRect();
-        const cx = r.left + r.width  / 2;
-        const cy = r.top  + r.height / 2;
-        if (Math.abs(cx - d.pos.x) < 100 && Math.abs(cy - d.pos.y) < 100) {
-          console.log('  ✅ T5 spatial match');
+        const r = el.getBoundingClientRect();
+        if (Math.abs(r.left + r.width / 2  - d.pos.x) < 100 &&
+            Math.abs(r.top  + r.height / 2 - d.pos.y) < 100) {
+          log('T8 spatial');
           return el;
         }
       }
-      console.log('  ⏭️  T5 spatial: no match');
     }
 
+    log('all tiers failed');
     return null;
   }
+
+  // ── Scoring helper ────────────────────────────────────────────────────────
+
+  function score(el, d, text, label, tag) {
+    let s = 0;
+    if (el.tagName.toLowerCase() === tag)              s += 1;
+    if (d.aria_label && el.getAttribute('aria-label') === d.aria_label) s += 5;
+    if (d.data_testid && el.getAttribute('data-testid') === d.data_testid) s += 5;
+    if (d.id && el.id === d.id)                        s += 4;
+    if (d.role && el.getAttribute('role') === d.role)  s += 1;
+
+    const et = cleanText(el);
+    if (text && et === text)                           s += 4;
+    else if (text && et.startsWith(text))              s += 2;
+    else if (label && et.includes(label))              s += 1;
+
+    if (d.aria_label && (el.getAttribute('aria-label') || '').toLowerCase().includes(d.aria_label.toLowerCase())) s += 2;
+    return s;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function cleanText(el) {
+    return (el.textContent || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  function labelMatches(el, text) {
+    if (!text) return true;
+    const t = cleanText(el);
+    return t === text || t.startsWith(text) || t.includes(text);
+  }
+
+  function log(msg) { console.log(`  ✅ ${msg}`); }
 
   function visible(el) {
     const r  = el.getBoundingClientRect();
