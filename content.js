@@ -593,7 +593,8 @@
     console.log('🔄 Joining existing session...');
     sessionActive = true;
     sessionStartTime = sessionData.sessionStartTime;
-    sessionSteps = sessionData.sessionSteps;
+    sessionSteps = sessionData.sessionSteps || [];
+    startingUrl = sessionData.startingUrl;
     
     // Add step for joining session
     addSessionStep('tab_joined', {
@@ -604,6 +605,11 @@
     // Start tracking in this tab
     startClickTracking();
     startNavigationTracking();
+    
+    // Resume STT session if it was active
+    if (sessionActive) {
+      startSTTSession();
+    }
     
     showSTTNotification('Joined existing session', 'info');
     console.log('✅ Joined session with', sessionSteps.length, 'steps');
@@ -616,8 +622,11 @@
         const sessionState = {
           sessionActive: sessionActive,
           sessionStartTime: sessionStartTime,
+          sessionSteps: sessionSteps,
+          startingUrl: startingUrl
         };
         chrome.storage.local.set({ 'opheliaSession': sessionState });
+        console.log('💾 Session state saved:', sessionSteps.length, 'steps');
       }
     } catch (error) {
       // Ignore extension context invalidated errors
