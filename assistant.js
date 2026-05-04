@@ -12,14 +12,13 @@ window.OpheliaAssistant = (() => {
   let _waitingForAction = false;
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
-  let _badgeEl = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
   function activate() {
     if (_active) { stop(); return; }
     if (window.opheliaTutorialActive) window.OpheliaPlayer?.stop();
-    _showGoalDialog();
+    _listenForGoal();
   }
 
   function stop() {
@@ -28,96 +27,63 @@ window.OpheliaAssistant = (() => {
     _cleanupFns.forEach(fn => fn());
     _cleanupFns = [];
     _clearHighlight();
-    _hideBadge();
+    _clearDotLabel();
     window.speechSynthesis?.cancel();
     _goal = ''; _messages = []; _stepCount = 0;
   }
 
   function isActive() { return _active; }
 
-  // ── Goal input dialog ───────────────────────────────────────────────────────
+  // ── Voice goal capture — no dialog, just mic ────────────────────────────────
 
-  function _showGoalDialog() {
-    document.getElementById('ophelia-goal-dlg')?.remove();
+  function _listenForGoal() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      // No speech API — tiny fallback input at bottom of screen
+      _showTextFallback();
+      return;
+    }
+    _setDotLabel('🎤 Say your goal…');
+    const mic = new SR();
+    mic.lang = 'en-US';
+    mic.onresult = (e) => {
+      const goal = [...e.results].map(r => r[0].transcript).join('').trim();
+      if (goal && e.results[e.results.length - 1].isFinal) {
+        _clearDotLabel();
+        _startSession(goal);
+      }
+    };
+    mic.onerror = () => { _clearDotLabel(); };
+    mic.start();
+  }
 
-    const dlg = document.createElement('div');
-    dlg.id = 'ophelia-goal-dlg';
-    dlg.style.cssText = [
-      'position:fixed','top:50%','left:50%','transform:translate(-50%,-50%)',
-      'background:rgba(9,9,13,0.98)','border:1.5px solid #4285f4',
-      'border-radius:16px','padding:24px 26px','width:430px',
-      'max-width:calc(100vw - 40px)','color:#fff','z-index:2147483647',
-      'box-shadow:0 20px 64px rgba(0,0,0,0.85)',
-      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'
-    ].join(';');
-
-    dlg.innerHTML = `
-      <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#4285f4;
-                  text-transform:uppercase;margin-bottom:10px">🤖 Ophelia Agent</div>
-      <div style="font-size:15px;color:#e8e8e8;margin-bottom:4px">What do you want to accomplish?</div>
-      <div style="font-size:12px;color:#555;margin-bottom:16px">
-        I'll watch your screen and guide you step by step, adapting as you go.
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input id="ophelia-gdlg-input" type="text"
-          placeholder="e.g. Change my profile picture on Facebook"
-          autocomplete="off"
-          style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.18);
-                 border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;
-                 font-family:inherit;outline:none"/>
-        <button id="ophelia-gdlg-mic"
-          style="background:rgba(66,133,244,0.12);border:1.5px solid #4285f4;
-                 border-radius:8px;padding:9px 11px;cursor:pointer;font-size:17px;flex-shrink:0">🎤</button>
-        <button id="ophelia-gdlg-go"
-          style="background:#4285f4;border:none;border-radius:8px;padding:10px 18px;
-                 cursor:pointer;color:#fff;font-size:14px;font-weight:600;
-                 font-family:inherit;flex-shrink:0">Start →</button>
-      </div>
-      <div id="ophelia-gdlg-status" style="font-size:11px;color:#555;margin-top:8px;min-height:14px"></div>
-    `;
-    document.body.appendChild(dlg);
-
-    const input  = dlg.querySelector('#ophelia-gdlg-input');
-    const micBtn = dlg.querySelector('#ophelia-gdlg-mic');
-    const goBtn  = dlg.querySelector('#ophelia-gdlg-go');
-    const status = dlg.querySelector('#ophelia-gdlg-status');
-
-    input.focus();
-
-    const submit = () => {
-      const goal = input.value.trim();
-      if (!goal) { input.style.borderColor = '#f44336'; return; }
-      dlg.remove();
+  function _showTextFallback() {
+    const wrap = document.createElement('div');
+    wrap.id = 'ophelia-fallback';
+    wrap.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
+      'z-index:2147483647;display:flex;gap:7px;align-items:center;' +
+      'background:rgba(9,9,13,0.95);border:1px solid rgba(255,122,26,0.4);' +
+      'border-radius:12px;padding:10px 14px;' +
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
+      'box-shadow:0 8px 28px rgba(0,0,0,0.6)';
+    wrap.innerHTML =
+      '<input id="ophelia-fb-input" type="text" placeholder="What do you want to accomplish?"' +
+      ' style="background:none;border:none;outline:none;color:#fff;font-size:13px;' +
+      'font-family:inherit;width:300px"/>' +
+      '<button id="ophelia-fb-go" style="background:#ff7a1a;border:none;border-radius:7px;' +
+      'padding:6px 14px;cursor:pointer;color:#fff;font-size:13px;font-weight:600;' +
+      'font-family:inherit">→</button>';
+    document.body.appendChild(wrap);
+    const inp = wrap.querySelector('#ophelia-fb-input');
+    inp.focus();
+    const go = () => {
+      const goal = inp.value.trim();
+      if (!goal) return;
+      wrap.remove();
       _startSession(goal);
     };
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') dlg.remove(); });
-    goBtn.addEventListener('click', submit);
-
-    let mic = null;
-    micBtn.addEventListener('click', () => {
-      if (mic) { mic.stop(); mic = null; micBtn.textContent = '🎤'; return; }
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { status.textContent = 'Speech not supported.'; return; }
-      mic = new SR();
-      mic.lang = 'en-US';
-      mic.onstart  = () => { micBtn.textContent = '🔴'; status.textContent = 'Listening…'; };
-      mic.onresult = (e) => {
-        input.value = [...e.results].map(r => r[0].transcript).join('');
-        if (e.results[e.results.length - 1].isFinal) {
-          mic = null; micBtn.textContent = '🎤'; status.textContent = 'Press Start →';
-        }
-      };
-      mic.onerror = (e) => { micBtn.textContent = '🎤'; mic = null; };
-      mic.onend   = () => { micBtn.textContent = '🎤'; };
-      mic.start();
-    });
-
-    setTimeout(() => {
-      const outside = (e) => {
-        if (!dlg.contains(e.target)) { dlg.remove(); document.removeEventListener('click', outside, true); }
-      };
-      document.addEventListener('click', outside, true);
-    }, 150);
+    wrap.querySelector('#ophelia-fb-go').addEventListener('click', go);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') wrap.remove(); });
   }
 
   // ── Session start ───────────────────────────────────────────────────────────
@@ -128,8 +94,6 @@ window.OpheliaAssistant = (() => {
     _active = true;
     _stepCount = 0;
 
-    _showBadge();
-    _setBadge('Starting…');
     _watchPage();
     await _analyze('What is the first step the user should take?');
   }
@@ -142,7 +106,7 @@ window.OpheliaAssistant = (() => {
     _waitingForAction = false;
     _clearHighlight();
 
-    _setBadge('Thinking…');
+    _setDotLabel('Thinking…');
 
     // 1. Take screenshot (visual context)
     const screenshot = await _captureScreen();
@@ -171,7 +135,7 @@ window.OpheliaAssistant = (() => {
     const step = await _callClaude();
 
     if (!step) {
-      _setBadge('No response — try again.');
+      _setDotLabel('No response — try again.');
       _waitingForAction = true;
       return;
     }
@@ -189,7 +153,7 @@ window.OpheliaAssistant = (() => {
     // 5a. Goal complete
     if (step.done) {
       _speak('Done! Your goal is complete.');
-      _setBadge('✅ Done!');
+      _setDotLabel('✅ Done!');
       setTimeout(stop, 4000);
       return;
     }
@@ -198,8 +162,8 @@ window.OpheliaAssistant = (() => {
     const el = step.element ? _findEl(step.element) : null;
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); _highlightElement(el); }
 
-    _setBadge(`Step ${_stepCount}`);
     _speak(step.instruction);
+    if (!el) _setDotLabel(`Step ${_stepCount}`);
 
     _waitingForAction = true;
   }
@@ -221,9 +185,9 @@ window.OpheliaAssistant = (() => {
     const onClick = (e) => {
       if (!_active || !_waitingForAction) return;
       // Ignore clicks on our own panel
-      if (e.target.closest('#ophelia-badge') || e.target.closest('#ophelia-ask-popup') || e.target.closest('#ophelia-goal-dlg')) return;
+      if (e.target.closest('#ophelia-fallback')) return;
       _clearHighlight();
-      _setBadge('Processing…');
+      _setDotLabel('Processing…');
       reanalyze('User just performed an action. What is the next step toward the goal?');
     };
 
@@ -231,7 +195,7 @@ window.OpheliaAssistant = (() => {
       if (!_active) { clearInterval(navPoll); return; }
       if (location.href !== lastUrl) {
         lastUrl = location.href;
-        _setBadge('Page changed…');
+        _setDotLabel('Page changed…');
         reanalyze('User navigated to a new page. What is the next step toward the goal?');
       }
     }, 300);
@@ -248,8 +212,7 @@ window.OpheliaAssistant = (() => {
   function _userMessage(text) {
     if (!_active) return;
     _clearHighlight();
-    _setBadge('Processing…');
-    // Inject user message into trigger — don't push separately (avoids consecutive user turns)
+    _setDotLabel('Processing…');
     _analyze(`User says: "${text}". Take this into account for the next step.`);
   }
 
@@ -437,88 +400,45 @@ window.OpheliaAssistant = (() => {
     }).join('\n');
   }
 
-  // ── Minimal floating badge ───────────────────────────────────────────────────
+  // ── Dot label — small text pill anchored next to the orange dot ─────────────
 
-  function _showBadge() {
-    if (document.getElementById('ophelia-badge')) return;
-    const b = document.createElement('div');
-    b.id = 'ophelia-badge';
-    b.style.cssText = [
-      'position:fixed', 'top:14px', 'right:14px', 'z-index:2147483647',
-      'background:rgba(9,9,13,0.92)', 'border:1px solid rgba(66,133,244,0.4)',
-      'border-radius:20px', 'padding:5px 10px 5px 12px',
-      'display:flex', 'align-items:center', 'gap:8px',
-      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-      'font-size:12px', 'color:#ccc',
-      'backdrop-filter:blur(8px)', '-webkit-backdrop-filter:blur(8px)',
-      'box-shadow:0 4px 16px rgba(0,0,0,0.55)', 'cursor:default'
-    ].join(';');
-    b.innerHTML =
-      '<span id="ophelia-badge-text">🤖</span>' +
-      '<button id="ophelia-badge-ask" title="Ask Ophelia" style="background:none;border:none;' +
-      'color:#666;cursor:pointer;font-size:12px;padding:0;line-height:1">💬</button>' +
-      '<button id="ophelia-badge-stop" title="Stop" style="background:none;border:none;' +
-      'color:#555;cursor:pointer;font-size:13px;padding:0;line-height:1">✕</button>';
-    document.body.appendChild(b);
-    _badgeEl = b;
-    b.querySelector('#ophelia-badge-stop').addEventListener('click', stop);
-    b.querySelector('#ophelia-badge-ask').addEventListener('click', _showAskPopup);
+  function _setDotLabel(text) {
+    let lbl = document.getElementById('ophelia-dot-label');
+    if (!text) { lbl?.remove(); return; }
+    if (!lbl) {
+      lbl = document.createElement('div');
+      lbl.id = 'ophelia-dot-label';
+      lbl.style.cssText = [
+        'position:fixed', 'z-index:2147483647', 'pointer-events:none',
+        'background:rgba(9,9,13,0.88)',
+        'color:#fff', 'font-size:11px', 'font-weight:500',
+        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+        'padding:3px 9px', 'border-radius:9px', 'white-space:nowrap',
+        'border:1px solid rgba(255,122,26,0.35)',
+        'backdrop-filter:blur(6px)', '-webkit-backdrop-filter:blur(6px)'
+      ].join(';');
+      document.body.appendChild(lbl);
+    }
+    lbl.textContent = text;
+    // Position: right of the orange dot if it exists, else bottom-center
+    const dot = document.getElementById('ophelia-dot');
+    if (dot) {
+      const cx = parseFloat(dot.style.left) || 0; // dot center x
+      const cy = parseFloat(dot.style.top)  || 0; // dot center y
+      lbl.style.left      = `${cx + 16}px`;
+      lbl.style.top       = `${cy - 10}px`;
+      lbl.style.bottom    = 'auto';
+      lbl.style.transform = 'none';
+    } else {
+      lbl.style.bottom    = '24px';
+      lbl.style.left      = '50%';
+      lbl.style.top       = 'auto';
+      lbl.style.transform = 'translateX(-50%)';
+    }
   }
 
-  function _setBadge(text) {
-    if (!_badgeEl) _showBadge();
-    const el = document.getElementById('ophelia-badge-text');
-    if (el) el.textContent = `🤖 ${text}`;
-  }
-
-  function _hideBadge() {
-    document.getElementById('ophelia-badge')?.remove();
-    document.getElementById('ophelia-ask-popup')?.remove();
-    _badgeEl = null;
-  }
-
-  function _showAskPopup() {
-    document.getElementById('ophelia-ask-popup')?.remove();
-    const popup = document.createElement('div');
-    popup.id = 'ophelia-ask-popup';
-    popup.style.cssText = [
-      'position:fixed', 'top:48px', 'right:14px', 'z-index:2147483647',
-      'background:rgba(9,9,13,0.97)', 'border:1px solid rgba(66,133,244,0.35)',
-      'border-radius:12px', 'padding:12px',
-      'display:flex', 'gap:7px', 'align-items:center',
-      'box-shadow:0 8px 28px rgba(0,0,0,0.6)', 'width:280px',
-      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'
-    ].join(';');
-    popup.innerHTML =
-      '<input id="ophelia-ask-txt" type="text" placeholder="Tell me something…"' +
-      ' style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);' +
-      'border-radius:7px;padding:7px 10px;color:#fff;font-size:13px;font-family:inherit;outline:none"/>' +
-      '<button id="ophelia-ask-mic" style="background:none;border:none;cursor:pointer;font-size:16px">🎤</button>' +
-      '<button id="ophelia-ask-send" style="background:#4285f4;border:none;border-radius:7px;' +
-      'padding:7px 12px;cursor:pointer;color:#fff;font-size:12px;font-weight:600;font-family:inherit">→</button>';
-    document.body.appendChild(popup);
-    const input = popup.querySelector('#ophelia-ask-txt');
-    input.focus();
-    const send = () => {
-      const t = input.value.trim();
-      if (!t) return;
-      popup.remove();
-      _userMessage(t);
-    };
-    popup.querySelector('#ophelia-ask-send').addEventListener('click', send);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); if (e.key === 'Escape') popup.remove(); });
-    let mic = null;
-    popup.querySelector('#ophelia-ask-mic').addEventListener('click', function() {
-      if (mic) { mic.stop(); mic = null; this.textContent = '🎤'; return; }
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) return;
-      mic = new SR();
-      mic.lang = 'en-US';
-      mic.onstart  = () => { this.textContent = '🔴'; };
-      mic.onresult = (e) => { input.value = [...e.results].map(r => r[0].transcript).join(''); };
-      mic.onend    = () => { this.textContent = '🎤'; if (input.value.trim()) send(); };
-      mic.start();
-    });
+  function _clearDotLabel() {
+    document.getElementById('ophelia-dot-label')?.remove();
   }
 
   // ── TTS ─────────────────────────────────────────────────────────────────────
