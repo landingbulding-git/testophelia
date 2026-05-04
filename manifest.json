@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Cross-Tab Utility",
+  "version": "1.0.0",
+  "description": "A Chrome Extension that injects a persistent, interactive orange sphere into every browser tab",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "commands": {
+    "toggle-sphere": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "MacCtrl+Shift+U"
+      },
+      "description": "Toggle cross-tab sphere"
+    },
+    "send-firebase": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "MacCtrl+Shift+F"
+      },
+      "description": "Send static data to Firebase"
+    }
+  }
+}

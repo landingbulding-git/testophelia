@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cross-Tab Utility</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="popup-container">
+        <header class="popup-header">
+            <h1>Cross-Tab Utility</h1>
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Active</span>
+            </div>
+        </header>
+        
+        <main class="popup-content">
+            <section class="stats-section">
+                <div class="stat-item">
+                    <span class="stat-value" id="activeTabCount">0</span>
+                    <span class="stat-label">Active Tabs</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="totalClicks">0</span>
+                    <span class="stat-label">Total Clicks</span>
+                </div>
+            </section>
+            
+            <section class="controls-section">
+                <div class="control-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="enableExtension" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Enable Extension</span>
+                    </label>
+                </div>
+                
+                <div class="control-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="showSphere" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Show Sphere</span>
+                    </label>
+                </div>
+                
+                <div class="control-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="enablePulse" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Pulse Animation</span>
+                    </label>
+                </div>
+            </section>
+            
+            <section class="tabs-section">
+                <h3>Active Tabs</h3>
+                <div class="tabs-list" id="tabsList">
+                    <div class="no-tabs">No active tabs</div>
+                </div>
+            </section>
+        </main>
+        
+        <footer class="popup-footer">
+            <button id="clearData" class="btn btn-secondary">Clear Data</button>
+            <button id="openOptions" class="btn btn-primary">Options</button>
+        </footer>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>
