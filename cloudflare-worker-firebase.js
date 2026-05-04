@@ -144,7 +144,12 @@ async function loadTutorial(request, apiKey, projectId) {
     
     // Find tutorial by session_id in JavaScript
     let tutorial = null;
+    let availableSessionIds = [];
     if (data.documents) {
+      availableSessionIds = data.documents.map(doc => ({
+        name: doc.name,
+        sessionId: doc.fields.session_id?.stringValue
+      }));
       tutorial = data.documents.find(doc => 
         doc.fields.session_id.stringValue === sessionId
       );
@@ -155,7 +160,8 @@ async function loadTutorial(request, apiKey, projectId) {
       debug: { 
         sessionId,
         totalDocuments: data.documents ? data.documents.length : 0,
-        found: !!tutorial
+        found: !!tutorial,
+        availableSessionIds
       } 
     }), {
       headers: {

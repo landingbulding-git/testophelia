@@ -1035,6 +1035,7 @@ Example output format:
       
       const data = await response.json();
       console.log('📊 Firebase response:', data);
+      console.log('📊 Available session IDs:', data.debug?.availableSessionIds);
       
       // Find the tutorial by session_id
       let tutorial = data.tutorial;
@@ -1043,6 +1044,7 @@ Example output format:
         console.error('❌ Tutorial not found in Firebase response');
         console.error('Looking for session_id:', sessionId);
         console.error('Total documents:', data.debug?.totalDocuments || 0);
+        console.error('Available session IDs:', data.debug?.availableSessionIds);
         throw new Error('Tutorial not found');
       }
       
