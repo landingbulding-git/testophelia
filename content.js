@@ -32,10 +32,12 @@
   // Firebase configuration
   let firebaseInitialized = true; // REST API doesn't need initialization
   
+  // Cloudflare Worker URL for Firebase operations
+  const firebaseWorkerUrl = 'https://ophelia-firebase-worker.norbertb-consulting.workers.dev'; // Replace with your actual worker URL
+  
   const firebaseConfig = {
-    apiKey: "YOUR_FIREBASE_API_KEY_HERE", // Replace with your Firebase API key
-    projectId: "ophelia-bd2e0", // Replace with your Firebase project ID
-    authDomain: "ophelia-bd2e0.firebaseapp.com" // Replace with your Firebase auth domain
+    projectId: "ophelia-bd2e0", // Your Firebase project ID
+    authDomain: "ophelia-bd2e0.firebaseapp.com" // Your Firebase auth domain
   };
   
   // Session tracking variables
@@ -788,7 +790,7 @@
   // Send session data to Firebase
   async function sendSessionDataToFirebase(sessionData) {
     try {
-      console.log('📤 Sending session data to Firebase...');
+      console.log('📤 Sending session data to Firebase via Cloudflare Worker...');
       
       // Extract STT results from session end step
       let sttResults = [];
@@ -812,15 +814,13 @@
         }
       };
       
-      // Firebase REST API endpoint
-      const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/ophelia_sessions?key=${firebaseConfig.apiKey}`;
-      
-      const response = await fetch(url, {
+      // Call Cloudflare Worker
+      const response = await fetch(`${firebaseWorkerUrl}/save-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(firebaseData)
+        body: JSON.stringify({ firebaseData })
       });
       
       if (!response.ok) {
@@ -841,7 +841,7 @@
   // Process session data with Gemini API for tutorial generation
   async function processSessionWithGemini(sessionData) {
     try {
-      console.log('🤖 Processing session with Gemini API...');
+      console.log('🤖 Processing session with Gemini API via Cloudflare Worker...');
       
       // Extract STT results and steps
       let sttResults = [];
@@ -895,8 +895,8 @@ Example output format:
         }
       };
       
-      // Call Gemini API directly
-      const response = await fetch(`${geminiConfig.baseUrl}/${geminiConfig.model}:generateContent?key=${geminiConfig.apiKey}`, {
+      // Call Gemini API via Cloudflare Worker
+      const response = await fetch(geminiConfig.workerUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -944,7 +944,7 @@ Example output format:
   // Save tutorial to recording_session collection
   async function saveTutorialToFirebase(sessionId, tutorialSteps, userInput, domData) {
     try {
-      console.log('📤 Saving tutorial to recording_session collection...');
+      console.log('📤 Saving tutorial to recording_session collection via Cloudflare Worker...');
       
       const firebaseData = {
         fields: {
@@ -956,14 +956,13 @@ Example output format:
         }
       };
       
-      const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/recording_session?key=${firebaseConfig.apiKey}`;
-      
-      const response = await fetch(url, {
+      // Call Cloudflare Worker
+      const response = await fetch(`${firebaseWorkerUrl}/save-tutorial`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(firebaseData)
+        body: JSON.stringify({ firebaseData })
       });
       
       if (!response.ok) {
@@ -987,17 +986,16 @@ Example output format:
   
   // Generate tutorial URL
   function generateTutorialUrl(sessionId) {
-    return `https://www.example.com/tutorial?id=${sessionId}`;
+    return `https://testophelia.vercel.app/tutorial.html?id=${sessionId}`;
   }
   
   // Load tutorial from Firebase
   async function loadTutorialFromFirebase(sessionId) {
     try {
-      console.log('📥 Loading tutorial from Firebase:', sessionId);
+      console.log('📥 Loading tutorial from Firebase via Cloudflare Worker:', sessionId);
       
-      const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/recording_session?key=${firebaseConfig.apiKey}`;
-      
-      const response = await fetch(url);
+      // Call Cloudflare Worker
+      const response = await fetch(`${firebaseWorkerUrl}/load-tutorial?sessionId=${sessionId}`);
       
       if (!response.ok) {
         const error = await response.json();
@@ -1007,12 +1005,7 @@ Example output format:
       const data = await response.json();
       
       // Find the tutorial by session_id
-      let tutorial = null;
-      if (data.documents) {
-        tutorial = data.documents.find(doc => 
-          doc.fields.session_id.stringValue === sessionId
-        );
-      }
+      let tutorial = data.tutorial;
       
       if (!tutorial) {
         throw new Error('Tutorial not found');

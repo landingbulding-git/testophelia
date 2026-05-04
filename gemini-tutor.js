@@ -95,9 +95,9 @@ class GeminiTutor {
         }
       };
 
-      console.log('🤖 Sending request to Gemini...');
+      console.log('🤖 Sending request to Gemini via Cloudflare Worker...');
 
-      const response = await fetch(`${this.config.baseUrl}/${this.config.model}:generateContent`, {
+      const response = await fetch(this.config.workerUrl, {
         method: 'POST',
         headers: this.config.getAuthHeaders(),
         body: JSON.stringify(requestBody)

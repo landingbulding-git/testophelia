@@ -1,38 +1,31 @@
 // Gemini 3 Flash Configuration and API Management
+// Now uses Cloudflare Worker for secure API key handling
 
 class GeminiConfig {
   constructor() {
-    // 🔒 YOUR PERSONAL API KEY - HARDCODED FOR YOUR USE ONLY
-    this.apiKey = 'YOUR_GEMINI_API_KEY_HERE'; // Replace with your actual API key
-    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+    // Cloudflare Worker URL for secure API calls
+    this.workerUrl = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev'; // Replace with your actual worker URL
     this.model = 'models/gemini-3.1-flash-lite-preview';
     this.isConfigured = false;
   }
 
   async initialize() {
-    // Use hardcoded API key for personal use
+    // Cloudflare Worker handles API keys securely
     try {
-      if (this.apiKey && this.apiKey !== 'YOUR_API_KEY_HERE') {
-        this.isConfigured = true;
-        console.log('✅ Gemini API key loaded from code');
-      } else {
-        console.log('⚠️ Gemini API key not set in code');
-        console.log('💡 Please edit gemini-config.js and replace YOUR_API_KEY_HERE with your actual API key');
-      }
+      this.isConfigured = true;
+      console.log('✅ Gemini API configured via Cloudflare Worker');
     } catch (error) {
-      console.error('❌ Failed to initialize API key:', error);
+      console.error('❌ Failed to initialize API config:', error);
     }
   }
 
-  // API key is hardcoded - no dynamic configuration needed
-
+  // Cloudflare Worker handles API key authentication
   getAuthHeaders() {
     if (!this.isConfigured) {
       throw new Error('Gemini API not configured');
     }
     return {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': this.apiKey
+      'Content-Type': 'application/json'
     };
   }
 
@@ -42,7 +35,7 @@ class GeminiConfig {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/models/${this.model}:generateContent`, {
+      const response = await fetch(this.workerUrl, {
         method: 'POST',
         headers: this.getAuthHeaders(),
         body: JSON.stringify({
