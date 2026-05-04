@@ -7,6 +7,7 @@
   let isListening           = false;
   let _justStoppedRecording = false; // grace-period flag to silence tutor TTS
   let _askMode              = false; // waiting for user to speak a request to the assistant
+  let _justHandledAsk       = false; // blocks stray STT results after ask-mode fires
 
   // ── Gemini tutor state ───────────────────────────────────────────────────
   let geminiConfig = null;
@@ -244,13 +245,19 @@
       // Route speech to the right consumer
       if (window.OpheliaRecorder.isActive()) {
         // already pushed above
-      } else if (_askMode && window.OpheliaAssistant) {
+      } else if (_askMode) {
         // First speech in ask-mode → fire the assistant, exit ask-mode
         _askMode = false;
+        _justHandledAsk = true;
+        setTimeout(() => { _justHandledAsk = false; }, 3000);
         stopSTT();
         _setSphereColor('#ff7a1a');
-        window.OpheliaAssistant.ask(final);
-      } else if (!_justStoppedRecording) {
+        if (window.OpheliaAssistant) {
+          window.OpheliaAssistant.ask(final);
+        } else {
+          window.OpheliaNotify('Assistant not ready — try again', 'error');
+        }
+      } else if (!_justStoppedRecording && !_justHandledAsk && !window.OpheliaAssistant?.isActive()) {
         sendToTutor(final);
       }
     };

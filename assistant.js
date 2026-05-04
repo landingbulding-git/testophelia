@@ -23,15 +23,18 @@ window.OpheliaAssistant = (() => {
     const plan = await generatePlan(userRequest, ctx);
 
     if (!plan?.steps?.length) {
-      const msg = plan?.message || "I'm not sure how to help with that on this page.";
-      speak(msg);
-      notify(msg, 'error');
+      // Never speak the full Gemini message — it could be a long conversational reply.
+      // Give a short audio cue only.
+      const hint = "I couldn't figure out the steps for that on this page. Try rephrasing.";
+      speak(hint);
+      notify(plan?.message || hint, 'error');
       _reset();
       return;
     }
 
-    speak(`I found ${plan.steps.length} step${plan.steps.length > 1 ? 's' : ''}. Let's go.`);
-    await sleep(800);
+    const n = plan.steps.length;
+    speak(`Got it. I have ${n} step${n > 1 ? 's' : ''} for you. Here we go.`);
+    await sleep(1200);
     await runSteps(plan.steps, 0);
   }
 
@@ -185,18 +188,18 @@ window.OpheliaAssistant = (() => {
   async function generatePlan(request, ctx) {
     const elStr = _formatElements(ctx.elements);
     const prompt =
-      `You are a browser assistant. Help the user complete a task step by step.\n\n` +
-      `Page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n\n` +
-      `Visible/nearby interactive elements (use EXACT attribute values):\n${elStr}\n\n` +
-      `User request: "${request}"\n\n` +
-      `Rules:\n` +
-      `- Use ONLY elements from the list above. Copy their exact aria_label/text_content values.\n` +
-      `- If a step opens a dropdown/dialog with new elements, include it as its own step.\n` +
-      `- If navigation is expected, a "wait" step (element: null) is fine.\n` +
-      `- Write instructions as short, friendly sentences a non-technical user can follow.\n\n` +
-      `Return ONLY valid JSON (no markdown):\n` +
-      `{"possible":true,"steps":[{"instruction":"...","element":{"tag":"...","aria_label":"...","text_content":"...","role":"...","data_testid":"..."}}]}\n` +
-      `If the task is impossible with current elements: {"possible":false,"message":"short reason"}`;
+      `You are a browser step-by-step guide generator. Output ONLY a JSON object — no prose, no markdown.\n\n` +
+      `Current page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n\n` +
+      `Interactive elements visible on this page (copy attribute values exactly as shown):\n${elStr}\n\n` +
+      `User wants: "${request}"\n\n` +
+      `STRICT RULES:\n` +
+      `1. Only use elements listed above. Copy aria_label / text_content verbatim.\n` +
+      `2. Each step = one click/action. Keep instructions under 12 words.\n` +
+      `3. If a click will open a menu with NEW elements needed later, that click is its own step.\n` +
+      `4. element can be null only for navigation-wait steps.\n\n` +
+      `OUTPUT FORMAT (JSON only, no other text):\n` +
+      `{"possible":true,"steps":[{"instruction":"SHORT sentence","element":{"tag":"","aria_label":"","text_content":"","role":""}}]}\n` +
+      `If impossible: {"possible":false,"message":"one short sentence reason"}`;
     return callGemini(prompt);
   }
 
@@ -228,10 +231,13 @@ window.OpheliaAssistant = (() => {
         })
       });
       if (!res.ok) throw new Error(`Gemini ${res.status}`);
-      const data  = await res.json();
-      const raw   = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      return JSON.parse(clean);
+      const data = await res.json();
+      const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      console.log('🤖 Gemini raw:', raw.substring(0, 300));
+      // Extract the first JSON object — ignores surrounding prose / markdown fences
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('No JSON object in response');
+      return JSON.parse(match[0]);
     } catch (e) {
       console.error('❌ Assistant Gemini call failed:', e);
       return null;
