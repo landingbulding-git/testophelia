@@ -1035,7 +1035,6 @@ Example output format:
       
       const data = await response.json();
       console.log('📊 Firebase response:', data);
-      console.log('📊 Available session IDs:', data.debug?.availableSessionIds);
       
       // Find the tutorial by session_id
       let tutorial = data.tutorial;
@@ -1043,19 +1042,31 @@ Example output format:
       if (!tutorial) {
         console.error('❌ Tutorial not found in Firebase response');
         console.error('Looking for session_id:', sessionId);
-        console.error('Total documents:', data.debug?.totalDocuments || 0);
-        console.error('Available session IDs:', data.debug?.availableSessionIds);
         throw new Error('Tutorial not found');
       }
       
       console.log('📊 Tutorial structure:', tutorial);
       
-      // Parse tutorial steps
-      const tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
+      // Parse tutorial steps - handle nested structure
+      const tutorialStepsData = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
+      const tutorialSteps = tutorialStepsData.steps || tutorialStepsData;
       console.log('📚 Tutorial steps loaded:', tutorialSteps);
       
-      // Execute tutorial (now includes URL navigation)
-      await executeTutorial(tutorialSteps);
+      // Parse dom_data to get entry URL
+      let entryUrl = null;
+      if (tutorial.fields.dom_data) {
+        const domData = JSON.parse(tutorial.fields.dom_data.stringValue);
+        console.log('📊 DOM data:', domData);
+        
+        // Get the first step's URL as entry URL
+        if (domData.length > 0 && domData[0].url) {
+          entryUrl = domData[0].url;
+          console.log('🌐 Entry URL from dom_data:', entryUrl);
+        }
+      }
+      
+      // Execute tutorial with entry URL
+      await executeTutorial(tutorialSteps, entryUrl);
       
     } catch (error) {
       console.error('❌ Failed to load tutorial from Firebase:', error);
@@ -1064,19 +1075,18 @@ Example output format:
   }
   
   // Execute tutorial steps
-  async function executeTutorial(tutorialSteps) {
+  async function executeTutorial(tutorialSteps, entryUrl = null) {
     try {
       console.log('🚀 Executing tutorial steps...');
       
-      // Check if first step has a URL to navigate to
-      if (tutorialSteps.length > 0 && tutorialSteps[0].url) {
-        const firstStepUrl = tutorialSteps[0].url;
-        console.log('🌐 Navigating to entry URL:', firstStepUrl);
+      // Navigate to entry URL if provided
+      if (entryUrl) {
+        console.log('🌐 Navigating to entry URL:', entryUrl);
         
         // Navigate to the entry URL
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
           if (tabs[0]) {
-            chrome.tabs.update(tabs[0].id, { url: firstStepUrl });
+            chrome.tabs.update(tabs[0].id, { url: entryUrl });
           }
         });
         
