@@ -99,6 +99,24 @@
     sphere.style.boxShadow = '0 0 18px #ff7a1a';
     sphere.style.pointerEvents = 'auto';
     
+    // Inject ophelia tutorial pulse styles
+    if (!document.getElementById('ophelia-styles')) {
+      const style = document.createElement('style');
+      style.id = 'ophelia-styles';
+      style.textContent = `
+        @keyframes ophelia-target-pulse {
+          0%, 100% { outline-color: #ff7a1a; outline-offset: 2px; }
+          50% { outline-color: #ff4500; outline-offset: 6px; }
+        }
+        .ophelia-target {
+          outline: 3px solid #ff7a1a !important;
+          outline-offset: 2px !important;
+          animation: ophelia-target-pulse 1s ease-in-out infinite !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+    
     // Add click handler
     sphere.addEventListener('click', handleSphereClick);
     
@@ -291,6 +309,35 @@
     return elements;
   }
   
+  // Generate a unique, stable CSS selector path for an element
+  function generateSelectorPath(element) {
+    const path = [];
+    let current = element;
+    while (current && current !== document.body) {
+      let selector = current.tagName.toLowerCase();
+      // Prefer stable anchors: id or data-testid break the chain
+      if (current.id && !current.id.startsWith('injected_')) {
+        selector += `#${CSS.escape(current.id)}`;
+        path.unshift(selector);
+        break;
+      }
+      if (current.getAttribute('data-testid')) {
+        selector += `[data-testid="${current.getAttribute('data-testid')}"]`;
+        path.unshift(selector);
+        break;
+      }
+      const siblings = current.parentNode
+        ? Array.from(current.parentNode.children).filter(s => s.tagName === current.tagName)
+        : [];
+      if (siblings.length > 1) {
+        selector += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+      }
+      path.unshift(selector);
+      current = current.parentElement;
+    }
+    return path.join(' > ');
+  }
+  
   // Extract element information
   function extractElementInfo(element) {
     try {
@@ -305,34 +352,28 @@
         return null;
       }
       
-      // Extract human-readable name
-      let label = '';
+      // Collect all stable identifiers, aria-label first (most reliable on React sites)
+      const ariaLabel = element.getAttribute('aria-label') || '';
+      const testId   = element.getAttribute('data-testid') || '';
+      const placeholder = element.getAttribute('placeholder') || '';
+      const value    = element.getAttribute('value') || '';
+      const text     = element.textContent ? element.textContent.trim().substring(0, 50) : '';
       
-      if (element.getAttribute('aria-label')) {
-        label = element.getAttribute('aria-label');
-      } else if (element.textContent && element.textContent.trim()) {
-        label = element.textContent.trim().substring(0, 50);
-      } else if (element.getAttribute('placeholder')) {
-        label = element.getAttribute('placeholder');
-      } else if (element.getAttribute('value')) {
-        label = element.getAttribute('value');
-      } else if (element.getAttribute('data-testid')) {
-        label = element.getAttribute('data-testid');
-      } else {
-        label = element.tagName.toLowerCase();
-      }
+      // Build label in priority order
+      const label = ariaLabel || testId || placeholder || value || text || element.tagName.toLowerCase();
       
       // Calculate center coordinates
       const centerX = Math.round(rect.left + rect.width / 2);
       const centerY = Math.round(rect.top + rect.height / 2);
       
       return {
-        id: `injected_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: element.id && !element.id.startsWith('injected_') ? element.id : null,
+        aria_label: ariaLabel || null,
+        data_testid: testId || null,
+        selector: generateSelectorPath(element),
         label: label,
-        pos: {
-          x: centerX,
-          y: centerY
-        }
+        tag: element.tagName.toLowerCase(),
+        pos: { x: centerX, y: centerY }
       };
       
     } catch (error) {
@@ -1150,20 +1191,16 @@ Example output format:
           y: rect.top + rect.height / 2
         });
         
-        // Highlight element
-        const prevOutline = foundElement.style.outline;
-        const prevOffset = foundElement.style.outlineOffset;
-        foundElement.style.outline = '3px solid #ff7a1a';
-        foundElement.style.outlineOffset = '2px';
+        // Goal 4: Apply pulse class to target element (CSS-driven, no inline overrides)
+        foundElement.classList.add('ophelia-target');
         
         console.log(`⏳ Step ${i + 1}: waiting for user interaction...`);
         
         // Wait for user interaction - returns whether page navigated
         const navigated = await waitForInteractionOrNavigation(foundElement);
         
-        // Remove highlight
-        foundElement.style.outline = prevOutline;
-        foundElement.style.outlineOffset = prevOffset;
+        // Remove pulse highlight
+        foundElement.classList.remove('ophelia-target');
         
         console.log(`✅ Step ${i + 1} done`);
         
@@ -1237,18 +1274,30 @@ Example output format:
   
   // Find element by attributes using 4-tier semantic fallback strategy
   async function findElementByAttributes(elementData) {
-    console.log('🔍 Tier 1: Checking for exact ID (non-injected)...');
+    // Tier 1a: Stable CSS selector path (most precise)
+    if (elementData.selector) {
+      try {
+        const el = document.querySelector(elementData.selector);
+        if (el) {
+          console.log('✅ Tier 1a SUCCESS: Found element by selector path');
+          return el;
+        }
+      } catch (e) { /* invalid selector, continue */ }
+      console.log('⏭️ Tier 1a FAILED: Selector path did not match');
+    }
     
-    // Tier 1: Exact ID (Fastest) - only if not injected
-    if (elementData.id && !elementData.id.startsWith('injected_')) {
+    console.log('🔍 Tier 1b: Checking for exact ID (non-injected)...');
+    
+    // Tier 1b: Exact ID (Fastest) - only if not injected
+    if (elementData.id && !String(elementData.id).startsWith('injected_')) {
       const element = document.getElementById(elementData.id);
       if (element) {
-        console.log('✅ Tier 1 SUCCESS: Found element by exact ID:', elementData.id);
+        console.log('✅ Tier 1b SUCCESS: Found element by exact ID:', elementData.id);
         return element;
       }
-      console.log('⏭️ Tier 1 FAILED: Element not found by ID');
+      console.log('⏭️ Tier 1b FAILED: Element not found by ID');
     } else {
-      console.log('⏭️ Tier 1 SKIPPED: No valid ID or injected ID detected');
+      console.log('⏭️ Tier 1b SKIPPED: No valid ID or injected ID detected');
     }
     
     console.log('🔍 Tier 2: Checking ARIA and Test IDs...');
@@ -1517,102 +1566,61 @@ Example output format:
   function scanDOM() {
     console.log('🔍 Scanning DOM for interactive elements...');
     
-    // Define interactive element selectors
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    
+    // Only target genuinely interactive elements - avoids wrapper-snag on plain divs
     const interactiveSelectors = [
       'button', 'a[href]', 'input', 'select', 'textarea',
-      '[onclick]', '[onmousedown]', '[onmouseup]',
       '[role="button"]', '[role="link"]', '[role="menuitem"]',
       '[role="tab"]', '[role="option"]', '[role="checkbox"]',
-      '[role="radio"]', '[aria-label]', '[aria-describedby]',
-      '[data-testid]', '[data-action]', '[data-click]'
+      '[role="radio"]', '[role="combobox"]', '[role="searchbox"]',
+      '[aria-label]', '[data-testid]'
     ];
     
     const elements = [];
-    const elementCounter = 0;
+    const seen = new Set();
     
-    // Get all interactive elements
     const allElements = document.querySelectorAll(interactiveSelectors.join(', '));
     
-    allElements.forEach((element, index) => {
+    allElements.forEach((element) => {
       try {
         const rect = element.getBoundingClientRect();
         const computedStyle = window.getComputedStyle(element);
         
-        // Skip hidden or invisible elements
-        if (computedStyle.display === 'none' || 
-            computedStyle.visibility === 'hidden' || 
-            computedStyle.opacity === '0' ||
+        // Skip invisible / hidden elements
+        if (computedStyle.display === 'none' ||
+            computedStyle.visibility === 'hidden' ||
+            parseFloat(computedStyle.opacity) === 0 ||
             rect.width === 0 || rect.height === 0) {
           return;
         }
         
-        // Extract human-readable name
-        let label = '';
+        // Goal 1: Only include elements visible in the current viewport
+        const inViewport = rect.top < vh && rect.bottom > 0 && rect.left < vw && rect.right > 0;
+        if (!inViewport) return;
         
-        // Try ARIA label first
-        if (element.getAttribute('aria-label')) {
-          label = element.getAttribute('aria-label');
-        } 
-        // Try text content
-        else if (element.textContent && element.textContent.trim()) {
-          label = element.textContent.trim().substring(0, 50);
-        }
-        // Try placeholder
-        else if (element.getAttribute('placeholder')) {
-          label = element.getAttribute('placeholder');
-        }
-        // Try value
-        else if (element.getAttribute('value')) {
-          label = element.getAttribute('value');
-        }
-        // Try data-testid
-        else if (element.getAttribute('data-testid')) {
-          label = element.getAttribute('data-testid');
-        }
-        // Use tag name as fallback
-        else {
-          label = element.tagName.toLowerCase();
-        }
+        // Deduplicate by selector path
+        const info = extractElementInfo(element);
+        if (!info || seen.has(info.selector)) return;
+        seen.add(info.selector);
         
-        // Calculate center coordinates
-        const centerX = Math.round(rect.left + rect.width / 2);
-        const centerY = Math.round(rect.top + rect.height / 2);
-        
-        // Create element object
-        elements.push({
-          id: `elem_${index}`,
-          label: label,
-          pos: {
-            x: centerX,
-            y: centerY
-          }
-        });
+        elements.push(info);
         
       } catch (error) {
         console.warn('Error processing element:', error);
       }
     });
     
-    // Create context object
     const context = {
       url: window.location.href,
       domain: window.location.hostname,
-      page_title: document.title,
-      tab_id: chrome.runtime.id || 'unknown'
+      page_title: document.title
     };
     
-    // Return JSON schema
-    const result = {
-      context: context,
-      elements: elements
-    };
+    const result = { context, elements };
     
-    console.log('📊 DOM scan complete:', elements.length, 'elements found');
-    console.log('🎯 Result:', JSON.stringify(result, null, 2));
-    
-    // Don't automatically display - result is stored elsewhere
-    // displayDOMScanResult(result);
-    
+    console.log(`📊 DOM scan complete: ${elements.length} visible interactive elements`);
     return result;
   }
   
