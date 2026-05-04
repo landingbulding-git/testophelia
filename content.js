@@ -1048,7 +1048,20 @@ Example output format:
         throw new Error('Tutorial not found');
       }
       
-      const tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
+      console.log('📊 Tutorial structure:', tutorial);
+      console.log('📊 Tutorial keys:', Object.keys(tutorial));
+      
+      // Parse tutorial steps - handle different structures
+      let tutorialSteps;
+      if (tutorial.fields && tutorial.fields.tutorial_steps) {
+        tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
+      } else if (tutorial.tutorial_steps) {
+        tutorialSteps = JSON.parse(tutorial.tutorial_steps);
+      } else {
+        console.error('❌ Tutorial structure unknown:', tutorial);
+        throw new Error('Tutorial structure unknown');
+      }
+      
       console.log('📚 Tutorial steps loaded:', tutorialSteps);
       
       // Execute tutorial
