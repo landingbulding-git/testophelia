@@ -118,6 +118,9 @@
     
     // Check for existing session on load
     checkForExistingSession();
+    
+    // Check for pending tutorial on load
+    checkForPendingTutorial();
   }
   
   function handleSphereClick() {
@@ -648,6 +651,18 @@
     });
   }
   
+  // Check for pending tutorial on tab load
+  function checkForPendingTutorial() {
+    chrome.storage.local.get(['pendingTutorial'], (result) => {
+      if (result.pendingTutorial) {
+        console.log('🔄 Found pending tutorial, executing...');
+        executeTutorial(result.pendingTutorial);
+        // Clear pending tutorial after starting execution
+        chrome.storage.local.remove('pendingTutorial');
+      }
+    });
+  }
+  
   // Setup intelligent mouse following for sphere
   function setupMouseFollowing(sphere) {
     let mouseX = window.innerWidth - 30; // Initial position (bottom-right)
@@ -1079,6 +1094,10 @@ Example output format:
       if (entryUrl) {
         console.log('🌐 Navigating to entry URL:', entryUrl);
         
+        // Store tutorial steps in storage for execution after navigation
+        chrome.storage.local.set({ 'pendingTutorial': tutorialSteps });
+        console.log('💾 Tutorial steps stored for post-navigation execution');
+        
         // Send message to background script to navigate
         chrome.runtime.sendMessage({ action: 'navigate', url: entryUrl }, (response) => {
           if (chrome.runtime.lastError) {
@@ -1088,11 +1107,11 @@ Example output format:
           }
         });
         
-        // Wait for navigation to complete before executing steps
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Don't execute steps here - they will be executed on the new page
+        return;
       }
       
-      // Execute each tutorial step
+      // Execute each tutorial step (only if no navigation)
       for (let i = 0; i < tutorialSteps.length; i++) {
         const step = tutorialSteps[i];
         console.log(`📍 Step ${i + 1}: ${step.instruction}`);
