@@ -112,19 +112,18 @@ window.OpheliaPlayer = (() => {
 
       window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: el });
 
-      // Wait for user to click somewhere — detect if page navigated
-      const navigated = await waitForInteraction();
+      // Wait for any interaction (click OR programmatic URL change)
+      await waitForInteraction();
       window.OpheliaOverlay.hide();
 
-      console.log(`✅  Step ${i + 1} complete (navigated: ${navigated})`);
+      // Sleep 500ms to give Chrome a window to kill this page if it was a real
+      // full-page navigation. If the page dies, JS stops here and PLAY_KEY
+      // (already saved above) is found by the new page's checkForPending.
+      // If we're still alive after 500ms → SPA route change, dropdown, or
+      // no navigation → clear the pre-save and continue the loop.
+      await sleep(500);
 
-      if (navigated) {
-        // PLAY_KEY is already set to next step — new page picks it up automatically
-        return;
-      }
-
-      // Step completed without navigation — clear pre-saved state so a page
-      // refresh doesn't spuriously resume the tutorial
+      console.log(`✅  Step ${i + 1} complete, continuing to next step`);
       if (!isLast) chrome.storage.local.remove(PLAY_KEY);
     }
 
@@ -225,26 +224,25 @@ window.OpheliaPlayer = (() => {
   }
 
   // ── Interaction & timing helpers ────────────────────────────────────────
+  // Resolves on the FIRST of: a click, OR a programmatic URL change.
+  // Does NOT try to classify navigation type — play() handles that via sleep.
 
   function waitForInteraction() {
     return new Promise((resolve) => {
       const startUrl = window.location.href;
       let done = false;
 
-      const finish = (navigated) => {
+      const finish = () => {
         if (done) return;
         done = true;
         document.removeEventListener('click', onClick, true);
         clearInterval(navPoll);
-        resolve(navigated);
+        resolve();
       };
 
-      // Any document click counts as the user completing the step.
-      // We wait 500ms before checking the URL — gives the browser time to
-      // register hash changes, SPA router changes, and full page navigations.
-      const onClick = () => setTimeout(() => finish(window.location.href !== startUrl), 500);
-      // Poll every 200ms for URL changes caused by programmatic navigation
-      const navPoll = setInterval(() => { if (window.location.href !== startUrl) finish(true); }, 200);
+      const onClick = () => finish();
+      // Also resolve on programmatic navigation (no click involved)
+      const navPoll = setInterval(() => { if (window.location.href !== startUrl) finish(); }, 200);
 
       document.addEventListener('click', onClick, true);
     });
