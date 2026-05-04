@@ -273,18 +273,27 @@ window.OpheliaPlayer = (() => {
     const label = (d.label        || '').trim().toLowerCase();
     const text  = (d.text_content || d.label || '').trim().toLowerCase();
 
-    // ── T1: aria-label exact ─────────────────────────────────────────────
+    // ── T1: aria-label exact (case-sensitive) ────────────────────────────
     if (d.aria_label) {
       const el = document.querySelector(`[aria-label="${d.aria_label}"]`);
       if (el && visible(el)) { log('T1 aria-label exact'); return el; }
 
-      // Partial aria-label on matching tag
-      const partial = [...document.querySelectorAll(`[aria-label]`)].find(e =>
-        visible(e) &&
-        e.tagName.toLowerCase() === tag &&
-        e.getAttribute('aria-label').toLowerCase().includes(d.aria_label.toLowerCase())
+      // T1b: case-insensitive exact aria-label
+      const needle = d.aria_label.toLowerCase();
+      const allAria = [...document.querySelectorAll('[aria-label]')];
+
+      const ciExact = allAria.find(e =>
+        visible(e) && e.getAttribute('aria-label').toLowerCase() === needle
       );
-      if (partial) { log('T1 aria-label partial+tag'); return partial; }
+      if (ciExact) { log('T1b aria-label case-insensitive'); return ciExact; }
+
+      // T1c: bidirectional partial — DOM contains ours OR ours contains DOM value
+      const partial = allAria.find(e => {
+        if (!visible(e)) return false;
+        const val = e.getAttribute('aria-label').toLowerCase();
+        return val.includes(needle) || needle.includes(val);
+      });
+      if (partial) { log('T1c aria-label partial (bidirectional)'); return partial; }
     }
 
     // ── T2: data-testid ──────────────────────────────────────────────────
@@ -385,7 +394,9 @@ window.OpheliaPlayer = (() => {
     else if (text && et.startsWith(text))              s += 2;
     else if (label && et.includes(label))              s += 1;
 
-    if (d.aria_label && (el.getAttribute('aria-label') || '').toLowerCase().includes(d.aria_label.toLowerCase())) s += 2;
+    const elAria = (el.getAttribute('aria-label') || '').toLowerCase();
+    const dAria  = (d.aria_label || '').toLowerCase();
+    if (dAria && (elAria.includes(dAria) || dAria.includes(elAria))) s += 3;
     return s;
   }
 

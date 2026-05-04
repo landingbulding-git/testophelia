@@ -185,8 +185,8 @@ window.OpheliaAssistant = (() => {
       const cs = window.getComputedStyle(el);
       if (cs.display === 'none' || cs.visibility === 'hidden') return;
       if (parseFloat(cs.opacity) === 0 || r.width === 0 || r.height === 0) return;
-      // Include up to 200px outside viewport (captures near-scroll content)
-      if (r.bottom < -200 || r.top > vh + 200 || r.right < 0 || r.left > vw + 200) return;
+      // Capture viewport + generous scroll buffer (sidebar menus, below-fold nav)
+      if (r.bottom < -500 || r.top > vh + 1500 || r.right < 0 || r.left > vw + 300) return;
 
       const aria    = el.getAttribute('aria-label') || '';
       const testId  = el.getAttribute('data-testid') || '';
@@ -219,7 +219,7 @@ window.OpheliaAssistant = (() => {
       });
     });
 
-    return { url: location.href, title: document.title, elements: elements.slice(0, 65) };
+    return { url: location.href, title: document.title, elements: elements.slice(0, 90) };
   }
 
   // ── Gemini: generate plan ──────────────────────────────────────────────────
@@ -229,16 +229,14 @@ window.OpheliaAssistant = (() => {
     const prompt =
       `You are a browser automation assistant. Your job is to break a user goal into EVERY individual click/action needed to complete it.\n\n` +
       `Current page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n\n` +
-      `Visible interactive elements (copy attribute values EXACTLY — do not invent values):\n${elStr}\n\n` +
+      `Visible interactive elements — each is indexed with its exact JSON attributes:\n${elStr}\n\n` +
       `User goal: "${request}"\n\n` +
-      `CRITICAL RULES — read carefully:\n` +
-      `1. List EVERY step. Do NOT collapse multiple clicks into one step. If the path is: open menu → pick item → toggle setting, that is 3 separate steps.\n` +
-      `2. Each step = exactly one user action (one click, one keystroke, one selection).\n` +
-      `3. If clicking an element will open a dropdown/dialog/menu, that click is its OWN step. The items inside the dropdown will appear AFTER that click, so they don't need to be in the current element list.\n` +
-      `4. Most real browser tasks need 3–8 steps. Single-step responses are almost always wrong unless the goal truly is one click.\n` +
-      `5. Use ONLY elements from the list. Copy their aria_label or text_content verbatim. null out fields you don't have.\n` +
-      `6. element may be null only for a "wait for page to load" step.\n` +
-      `7. Instructions must be short, plain English (under 10 words).\n\n` +
+      `CRITICAL RULES:\n` +
+      `1. For elements visible in the list above: copy the COMPLETE JSON object VERBATIM into the step's "element" field. Do NOT change any value, do NOT paraphrase, do NOT use your own knowledge of the site for these. Copy character-for-character.\n` +
+      `2. For elements that will only appear AFTER a click (dropdown items, dialogs, menus not yet open): use your best knowledge of the site — these won't be in the list.\n` +
+      `3. List EVERY individual click. Do NOT collapse multiple actions into one step. open menu → pick item → change setting = 3 separate steps.\n` +
+      `4. Most tasks need 3–8 steps. A single-step plan is almost always wrong.\n` +
+      `5. Instructions must be short plain English, under 10 words.\n\n` +
       `Example of correct multi-step output for "turn off autoplay":\n` +
       `{"possible":true,"steps":[\n` +
       `  {"instruction":"Click your account icon","element":{"tag":"button","aria_label":"Account","text_content":null,"role":null}},\n` +
@@ -297,14 +295,14 @@ window.OpheliaAssistant = (() => {
   }
 
   function _formatElements(elements) {
-    return elements.map(e => {
-      const attrs = [
-        e.role         ? `role=${e.role}`              : null,
-        e.aria_label   ? `aria="${e.aria_label}"`       : null,
-        e.data_testid  ? `testid="${e.data_testid}"`    : null,
-        e.text_content ? `text="${e.text_content}"`     : null
-      ].filter(Boolean).join(' ');
-      return `  [${e.tag}${attrs ? ' ' + attrs : ''} @${e.position}]`;
+    // Indexed JSON so Claude can copy attribute values verbatim — no paraphrasing
+    return elements.map((e, i) => {
+      const obj = { tag: e.tag };
+      if (e.aria_label)   obj.aria_label   = e.aria_label;
+      if (e.text_content) obj.text_content = e.text_content;
+      if (e.role)         obj.role         = e.role;
+      if (e.data_testid)  obj.data_testid  = e.data_testid;
+      return `[${String(i).padStart(2)}] @${e.position}  ${JSON.stringify(obj)}`;
     }).join('\n');
   }
 
