@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Ophelia — Record and share guided web tutorials with voice narration",
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_title": "Ophelia"
   },
   "permissions": [
@@ -18,12 +18,21 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "overlay.js", "recorder.js", "player.js", "agent-panel.js", "assistant.js", "content.js"],
+      "js": [
+        "src/ai/gemini-config.js",
+        "src/ai/agent-prompt.js",
+        "src/ai/gemini-tutor.js",
+        "src/content/overlay.js",
+        "src/content/recorder.js",
+        "src/content/player.js",
+        "src/content/assistant.js",
+        "src/content/content.js"
+      ],
       "run_at": "document_end"
     }
   ],

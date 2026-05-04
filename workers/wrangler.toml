@@ -1,5 +1,5 @@
 name = "ophelia-gemini-worker"
-main = "cloudflare-worker-gemini.js"
+main = "gemini.js"
 compatibility_date = "2024-01-01"
 
 [vars]
