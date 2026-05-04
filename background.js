@@ -42,6 +42,22 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
+// Listen for messages from content scripts
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'navigate') {
+    console.log('🎯 Navigate command triggered:', request.url);
+    
+    // Get active tab and navigate to URL
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.update(tabs[0].id, { url: request.url })
+          .then(() => console.log('✅ Navigation successful'))
+          .catch(err => console.error('❌ Navigation failed:', err));
+      }
+    });
+  }
+});
+
 // Listen for tutorial URL clicks
 chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId === 0) { // Main frame only

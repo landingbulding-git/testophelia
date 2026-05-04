@@ -1079,10 +1079,12 @@ Example output format:
       if (entryUrl) {
         console.log('🌐 Navigating to entry URL:', entryUrl);
         
-        // Navigate to the entry URL
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-          if (tabs[0]) {
-            chrome.tabs.update(tabs[0].id, { url: entryUrl });
+        // Send message to background script to navigate
+        chrome.runtime.sendMessage({ action: 'navigate', url: entryUrl }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('❌ Navigation message failed:', chrome.runtime.lastError);
+          } else {
+            console.log('✅ Navigation message sent');
           }
         });
         
