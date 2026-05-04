@@ -1088,7 +1088,7 @@ Example output format:
   // Execute tutorial steps
   async function executeTutorial(tutorialSteps, entryUrl = null) {
     try {
-      console.log('🚀 Executing tutorial steps in guided mode...');
+      console.log('🚀 Executing tutorial steps in simplified guided mode...');
       
       // Navigate to entry URL if provided
       if (entryUrl) {
@@ -1111,7 +1111,11 @@ Example output format:
         return;
       }
       
-      // Execute tutorial in guided mode (step by step)
+      // Stop pointer from following mouse
+      window.isSphereFollowing = false;
+      console.log('🛑 Pointer stopped following mouse');
+      
+      // Execute tutorial step by step
       for (let i = 0; i < tutorialSteps.length; i++) {
         const step = tutorialSteps[i];
         console.log(`📍 Step ${i + 1}: ${step.instruction}`);
@@ -1119,14 +1123,26 @@ Example output format:
         // Get element data from step (handle different structures)
         const elementData = step.dom_element || step;
         
-        // Find matching element in current DOM
-        const matchedElement = await findMatchingElement(elementData);
+        // Get element ID from recording
+        const elementId = elementData.id;
+        if (!elementId) {
+          console.warn('⚠️ Step has no element ID, skipping:', step);
+          continue;
+        }
         
-        if (matchedElement) {
-          console.log('✅ Found matching element:', matchedElement);
+        console.log('🔍 Looking for element ID:', elementId);
+        
+        // Wait a bit for DOM to be ready
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Find element in current DOM by ID
+        const element = document.getElementById(elementId);
+        
+        if (element) {
+          console.log('✅ Found element in DOM:', element);
           
           // Get element position
-          const rect = matchedElement.getBoundingClientRect();
+          const rect = element.getBoundingClientRect();
           const position = {
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2
@@ -1137,17 +1153,27 @@ Example output format:
           // Position pointer at element location
           await positionPointerAt(position);
           
-          // Wait for user interaction
-          await waitForUserInteraction(matchedElement);
+          // Highlight element
+          element.style.outline = '3px solid #ff7a1a';
+          element.style.outlineOffset = '2px';
           
-          console.log('✅ User interacted with element');
+          console.log('⏳ Waiting for user interaction...');
+          
+          // Wait for user to interact (simple approach)
+          await waitForUserInteractionSimple(element);
+          
+          // Remove highlight
+          element.style.outline = '';
+          element.style.outlineOffset = '';
+          
+          console.log('✅ User interacted, moving to next step');
         } else {
-          console.warn('⚠️ Could not find matching element for step:', step);
-          showSTTNotification(`Could not find element: ${step.instruction}`, 'warning');
+          console.warn('⚠️ Element not found in DOM:', elementId);
+          showSTTNotification(`Could not find element: ${elementId}`, 'warning');
+          
+          // Wait anyway before moving to next step
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
-        
-        // Wait before next step
-        await new Promise(resolve => setTimeout(resolve, 500));
       }
       
       console.log('✅ Tutorial execution complete');
@@ -1234,76 +1260,45 @@ Example output format:
     console.log('✅ Pointer positioned (mouse following disabled)');
   }
   
-  // Wait for user interaction with element
-  async function waitForUserInteraction(element) {
-    console.log('⏳ Waiting for user interaction with element...');
+  // Wait for user interaction with element (simple approach)
+  async function waitForUserInteractionSimple(element) {
+    console.log('⏳ Waiting for user interaction (simple mode)...');
     
     return new Promise((resolve) => {
-      // Add visual feedback to element
-      element.style.outline = '3px solid #ff7a1a';
-      element.style.outlineOffset = '2px';
-      element.style.cursor = 'pointer';
+      let interactionDetected = false;
       
       const interactionHandler = (event) => {
-        console.log('✅ User interacted with element:', event.type, event.target);
+        if (interactionDetected) return;
         
-        // Remove visual feedback
-        element.style.outline = '';
-        element.style.outlineOffset = '';
-        element.style.cursor = '';
-        
-        // Remove event listeners
-        element.removeEventListener('click', interactionHandler);
-        element.removeEventListener('mousedown', interactionHandler);
-        element.removeEventListener('mouseup', interactionHandler);
-        element.removeEventListener('change', interactionHandler);
-        element.removeEventListener('input', interactionHandler);
-        
-        // Stop pulsing animation on sphere
-        const sphere = document.getElementById('cross-tab-sphere');
-        if (sphere) {
-          sphere.style.animation = '';
-        }
-        
-        resolve();
-      };
-      
-      // Listen for various interaction events on the element
-      element.addEventListener('click', interactionHandler, true);
-      element.addEventListener('mousedown', interactionHandler, true);
-      element.addEventListener('mouseup', interactionHandler, true);
-      element.addEventListener('change', interactionHandler, true);
-      element.addEventListener('input', interactionHandler, true);
-      
-      // Also listen for any click in the document as fallback
-      const documentClickHandler = (event) => {
+        // Check if the click was on or inside the element
         if (element.contains(event.target) || element === event.target) {
-          console.log('✅ User clicked within element:', event.target);
-          interactionHandler(event);
+          interactionDetected = true;
+          console.log('✅ User clicked on element:', event.target);
+          
+          // Remove event listener
+          document.removeEventListener('click', interactionHandler, true);
+          
+          // Stop pulsing animation on sphere
+          const sphere = document.getElementById('cross-tab-sphere');
+          if (sphere) {
+            sphere.style.animation = '';
+          }
+          
+          resolve();
         }
       };
       
-      document.addEventListener('click', documentClickHandler, true);
+      // Listen for clicks on the document (capture phase)
+      document.addEventListener('click', interactionHandler, true);
       
-      // Cleanup function
-      const cleanup = () => {
-        element.removeEventListener('click', interactionHandler);
-        element.removeEventListener('mousedown', interactionHandler);
-        element.removeEventListener('mouseup', interactionHandler);
-        element.removeEventListener('change', interactionHandler);
-        element.removeEventListener('input', interactionHandler);
-        document.removeEventListener('click', documentClickHandler, true);
-        element.style.outline = '';
-        element.style.outlineOffset = '';
-        element.style.cursor = '';
-      };
-      
-      // Add timeout to prevent infinite wait
-      const timeout = setTimeout(() => {
-        console.log('⏱️ Timeout waiting for interaction, moving to next step');
-        cleanup();
-        resolve();
-      }, 30000); // 30 second timeout
+      // Timeout after 15 seconds
+      setTimeout(() => {
+        if (!interactionDetected) {
+          console.log('⏱️ Timeout, moving to next step');
+          document.removeEventListener('click', interactionHandler, true);
+          resolve();
+        }
+      }, 15000);
     });
   }
   
