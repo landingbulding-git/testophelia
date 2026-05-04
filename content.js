@@ -1029,11 +1029,13 @@ Example output format:
       
       if (!response.ok) {
         const error = await response.json();
+        console.error('📊 Worker error:', error);
         throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
       }
       
       const data = await response.json();
       console.log('📊 Firebase response:', data);
+      console.log('📊 Debug info:', data.debug);
       
       // Find the tutorial by session_id
       let tutorial = data.tutorial;
@@ -1041,10 +1043,8 @@ Example output format:
       if (!tutorial) {
         console.error('❌ Tutorial not found in Firebase response');
         console.error('Looking for session_id:', sessionId);
-        console.error('Available documents:', data.documents ? data.documents.length : 0);
-        if (data.documents && data.documents.length > 0) {
-          console.error('First document session_id:', data.documents[0].fields?.session_id?.stringValue);
-        }
+        console.error('Available documents:', data.debug?.responseLength || 0);
+        console.error('Query used:', data.debug?.query);
         throw new Error('Tutorial not found');
       }
       

@@ -124,8 +124,6 @@ async function loadTutorial(request, apiKey, projectId) {
       return new Response('sessionId required', { status: 400 });
     }
     
-    console.log('🔍 Loading tutorial for session_id:', sessionId);
-    
     // Use Firebase structured query to filter by session_id
     const firebaseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery?key=${apiKey}`;
     
@@ -142,20 +140,15 @@ async function loadTutorial(request, apiKey, projectId) {
       }
     };
     
-    console.log('🔍 Firebase query:', JSON.stringify(requestBody, null, 2));
-    
     const response = await fetch(firebaseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
     });
     
-    console.log('🔍 Firebase response status:', response.status);
-    
     if (!response.ok) {
       const error = await response.json();
-      console.error('🔍 Firebase error:', error);
-      return new Response(JSON.stringify(error), {
+      return new Response(JSON.stringify({ error, debug: { sessionId, query: requestBody } }), {
         status: response.status,
         headers: {
           'Content-Type': 'application/json',
@@ -165,26 +158,35 @@ async function loadTutorial(request, apiKey, projectId) {
     }
     
     const data = await response.json();
-    console.log('🔍 Firebase response data:', JSON.stringify(data, null, 2));
     
     // Get the first matching document
     let tutorial = null;
     if (data && data.length > 0 && data[0].document) {
       tutorial = data[0].document;
-      console.log('✅ Tutorial found:', tutorial.name);
-    } else {
-      console.log('❌ No tutorial found in response');
     }
     
-    return new Response(JSON.stringify({ tutorial }), {
+    return new Response(JSON.stringify({ 
+      tutorial, 
+      debug: { 
+        sessionId, 
+        query: requestBody,
+        responseLength: data.length,
+        found: !!tutorial
+      } 
+    }), {
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       }
     });
   } catch (error) {
-    console.error('❌ Load tutorial error:', error);
-    throw error;
+    return new Response(JSON.stringify({ error: error.message, debug: { sessionId } }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
   }
 }
 
