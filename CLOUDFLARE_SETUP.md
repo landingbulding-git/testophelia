@@ -61,7 +61,42 @@ wrangler deploy cloudflare-worker-firebase.js --name ophelia-firebase-worker
    - **Value:** `ophelia-bd2e0`
    - **Environment:** Production
 
-## Step 7: Get Worker URLs
+## Step 7: Add Claude Sonnet Support (Ophelia Assistant)
+
+The Ophelia Assistant planner now uses Claude Sonnet for better multi-step accuracy.
+
+### 7a. Get an Anthropic API key
+
+1. Go to [console.anthropic.com](https://console.anthropic.com)
+2. Create an account or log in
+3. Go to **API Keys** → **Create Key**
+4. Copy the key (starts with `sk-ant-…`)
+
+### 7b. Add the secret to the existing Gemini worker
+
+1. Go to Cloudflare Dashboard → Workers & Pages
+2. Select **ophelia-gemini-worker**
+3. Go to **Settings → Variables and Secrets**
+4. Add a new secret:
+   - **Name:** `ANTHROPIC_API_KEY`
+   - **Value:** your `sk-ant-…` key
+   - **Type:** Secret (encrypted)
+5. Click **Save**
+
+### 7c. Re-deploy the updated worker
+
+The worker file now handles both `/` (Gemini tutor) and `/claude` (Claude planner):
+
+```bash
+cd /Users/mac/Documents/Ophelia
+wrangler deploy cloudflare-worker-gemini.js
+```
+
+No changes to extension files needed — `assistant.js` already points to `/claude`.
+
+---
+
+## Step 8: Get Worker URLs
 
 After deployment, Cloudflare will provide you with URLs like:
 - Gemini Worker: `https://ophelia-gemini-worker.YOUR_SUBDOMAIN.workers.dev`
@@ -78,7 +113,7 @@ this.workerUrl = 'https://ophelia-gemini-worker.YOUR_SUBDOMAIN.workers.dev';
 
 **In `content.js`:**
 ```javascript
-const firebaseWorkerUrl = 'https://ophelia-firebase-worker.norbertb-consulting.workers.dev';
+const firebaseWorkerUrl = 'https://';
 ```
 
 ## Step 9: Test the Integration

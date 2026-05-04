@@ -2,8 +2,9 @@
 // Ctrl+Shift+U → own dialog (own mic) → scan DOM → Gemini plan → OpheliaPlayer.playSteps()
 // Completely independent of content.js STT routing.
 window.OpheliaAssistant = (() => {
-  const GM_WORKER  = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev';
-  const ASSIST_KEY = 'opheliaAssistant'; // cross-page persistence for navigation resume
+  const GM_WORKER     = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev';
+  const CLAUDE_WORKER = `${GM_WORKER}/claude`;
+  const ASSIST_KEY    = 'opheliaAssistant'; // cross-page persistence for navigation resume
 
   let _active      = false;
   let _userRequest = '';
@@ -247,10 +248,10 @@ window.OpheliaAssistant = (() => {
       `]}\n\n` +
       `Now produce the JSON for the user goal above. Output ONLY the JSON object, no markdown, no prose.\n` +
       `If the goal is truly impossible on this page: {"possible":false,"message":"brief reason"}`;
-    return callGemini(prompt);
+    return callClaude(prompt);
   }
 
-  // ── Gemini: re-plan remaining steps after DOM change ──────────────────────
+  // ── Claude: re-plan remaining steps after DOM change ──────────────────────
 
   async function replan(originalRequest, remaining, ctx) {
     const remStr  = remaining.map((s, i) => `${i + 1}. ${s.instruction}`).join('\n');
@@ -263,30 +264,31 @@ window.OpheliaAssistant = (() => {
       `Update the remaining steps to match the current page state. ` +
       `Keep the same goal; only adjust elements and wording as needed.\n` +
       `Return ONLY valid JSON: {"steps":[{"instruction":"...","element":{...}}]}`;
-    const result = await callGemini(prompt);
+    const result = await callClaude(prompt);
     return result?.steps || null;
   }
 
-  async function callGemini(prompt) {
+  async function callClaude(prompt) {
     try {
-      const res = await fetch(GM_WORKER, {
+      const res = await fetch(CLAUDE_WORKER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 1500 }
+          model:      'claude-3-5-sonnet-20241022',
+          max_tokens: 1500,
+          messages:   [{ role: 'user', content: prompt }]
         })
       });
-      if (!res.ok) throw new Error(`Gemini ${res.status}`);
+      if (!res.ok) throw new Error(`Claude ${res.status}`);
       const data = await res.json();
-      const raw  = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      console.log('🤖 Gemini raw:', raw.substring(0, 300));
-      // Extract the first JSON object — ignores surrounding prose / markdown fences
+      const raw  = data.content?.[0]?.text || '';
+      console.log('� Claude raw:', raw.substring(0, 400));
+      // Extract the JSON object — ignores any surrounding prose
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('No JSON object in response');
+      if (!match) throw new Error('No JSON object in Claude response');
       return JSON.parse(match[0]);
     } catch (e) {
-      console.error('❌ Assistant Gemini call failed:', e);
+      console.error('❌ Assistant Claude call failed:', e);
       return null;
     }
   }
