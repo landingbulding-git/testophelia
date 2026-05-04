@@ -160,10 +160,18 @@ window.OpheliaAssistant = (() => {
 
     // 5b. Show next step
     const el = step.element ? _findEl(step.element) : null;
-    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); _highlightElement(el); }
-
     _speak(step.instruction);
-    if (!el) _setDotLabel(`Step ${_stepCount}`);
+
+    if (el) {
+      // Instant scroll so getBoundingClientRect is correct immediately.
+      // Double-rAF ensures the browser has finished layout before we read positions.
+      el.scrollIntoView({ behavior: 'instant', block: 'center' });
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_active) _highlightElement(el);
+      }));
+    } else {
+      _setDotLabel(`Step ${_stepCount}`);
+    }
 
     _waitingForAction = true;
   }
@@ -359,7 +367,26 @@ window.OpheliaAssistant = (() => {
   // ── Element finder ──────────────────────────────────────────────────────────
 
   function _findEl(d) {
-    return window.OpheliaPlayer?.findElement(d) || null;
+    if (!d) return null;
+
+    // Primary: player's multi-tier matcher
+    const primary = window.OpheliaPlayer?.findElement(d);
+    if (primary) return primary;
+
+    // Fallback: visible element with matching aria-label or text content
+    const needle = (d.aria_label || d.text_content || '').trim().toLowerCase();
+    if (!needle) return null;
+
+    const SEL = 'button,a,input,select,[role="button"],[role="link"],[role="menuitem"],[role="tab"],[role="option"]';
+    for (const c of document.querySelectorAll(SEL)) {
+      const r = c.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const al = (c.getAttribute('aria-label') || '').toLowerCase();
+      const tx = (c.textContent || '').trim().toLowerCase().slice(0, 80);
+      if (al.includes(needle) || needle.includes(al) ||
+          tx.includes(needle) || needle.includes(tx)) return c;
+    }
+    return null;
   }
 
   // ── Element highlight — delegates to OpheliaOverlay (same as tutorial player) ─
@@ -368,22 +395,67 @@ window.OpheliaAssistant = (() => {
     _clearHighlight();
     if (!el) return;
     _highlightedEl = el;
+    _clearDotLabel(); // label not needed when dot is on the element
 
-    // Use the overlay for identical orange dot + target glow as the tutorial player
-    window.OpheliaOverlay.show({
-      stepNumber: _stepCount,
-      totalSteps: _stepCount + 1, // dummy — keeps progress bar non-NaN
-      instruction: '',             // TTS handles the instruction
-      element: el,
-      onCorrect: null
-    });
+    try {
+      window.OpheliaOverlay.show({
+        stepNumber: _stepCount,
+        totalSteps: _stepCount + 1,
+        instruction: '',
+        element: el,
+        onCorrect: null
+      });
+      document.getElementById('ophelia-card')?.remove();
+    } catch (e) {
+      console.warn('OpheliaOverlay unavailable, using fallback highlight', e);
+      _applyFallbackHighlight(el);
+      return;
+    }
 
-    // Remove the instruction card — we only want the dot and element highlight
-    document.getElementById('ophelia-card')?.remove();
+    // Re-pin dot after any late layout shifts (e.g. sticky headers, animations)
+    setTimeout(() => {
+      const dot = document.getElementById('ophelia-dot');
+      if (!dot || !_highlightedEl) return;
+      const r = _highlightedEl.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        dot.style.left = `${r.left + r.width  / 2}px`;
+        dot.style.top  = `${r.top  + r.height / 2}px`;
+      }
+    }, 250);
+  }
+
+  function _applyFallbackHighlight(el) {
+    // Pure CSS fallback when OpheliaOverlay is not available
+    if (!document.getElementById('ophelia-fb-css')) {
+      const s = document.createElement('style');
+      s.id = 'ophelia-fb-css';
+      s.textContent = `
+        .ophelia-fb-target {
+          outline: 3px solid #ff7a1a !important;
+          outline-offset: 4px !important;
+          box-shadow: 0 0 0 6px rgba(255,122,26,0.3) !important;
+        }`;
+      document.head.appendChild(s);
+    }
+    el.classList.add('ophelia-fb-target');
+    // Create a dot manually
+    const r   = el.getBoundingClientRect();
+    const dot = document.createElement('div');
+    dot.id = 'ophelia-dot';
+    dot.style.cssText = [
+      'position:fixed', `left:${r.left + r.width/2}px`, `top:${r.top + r.height/2}px`,
+      'width:18px','height:18px','background:#ff7a1a','border-radius:50%',
+      'transform:translate(-50%,-50%)','z-index:2147483647','pointer-events:none',
+      'animation:opheliaDotPulse 1.2s ease-in-out infinite'
+    ].join(';');
+    document.body.appendChild(dot);
   }
 
   function _clearHighlight() {
-    window.OpheliaOverlay.hide();
+    try { window.OpheliaOverlay.hide(); } catch (_) {}
+    // Also clean up any fallback highlight
+    document.getElementById('ophelia-dot')?.remove();
+    document.querySelectorAll('.ophelia-fb-target').forEach(e => e.classList.remove('ophelia-fb-target'));
     _highlightedEl = null;
   }
 
