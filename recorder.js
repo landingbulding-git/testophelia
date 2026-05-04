@@ -64,17 +64,35 @@ window.OpheliaRecorder = (() => {
       const aria   = el.getAttribute('aria-label') || '';
       const testId = el.getAttribute('data-testid') || '';
       const ph     = el.getAttribute('placeholder') || '';
-      const text   = (el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
-      const label  = aria || testId || ph || text || el.tagName.toLowerCase();
+
+      // Own text nodes only (avoids capturing all nested children's text)
+      const ownText = [...el.childNodes]
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => n.textContent.trim())
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .substring(0, 80);
+      // Full text as fallback
+      const fullText = (el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
+      const text  = ownText || fullText;
+      const label = aria || testId || ph || text || el.tagName.toLowerCase();
+
+      // Screen region hint (top/middle/bottom + left/center/right)
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      const hReg = cx < vw / 3 ? 'left' : cx < (2 * vw) / 3 ? 'center' : 'right';
+      const vReg = cy < vh / 3 ? 'top'  : cy < (2 * vh) / 3 ? 'middle' : 'bottom';
 
       return {
-        tag:          el.tagName.toLowerCase(),
-        id:           (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
-        aria_label:   aria   || null,
-        data_testid:  testId || null,
-        text_content: text   || null,
-        role:         el.getAttribute('role') || null,
-        selector:     selectorPath(el),
+        tag:           el.tagName.toLowerCase(),
+        id:            (el.id && !/^injected_/i.test(el.id)) ? el.id : null,
+        aria_label:    aria   || null,
+        data_testid:   testId || null,
+        text_content:  text   || null,
+        role:          el.getAttribute('role') || null,
+        screen_region: `${vReg}-${hReg}`,
+        selector:      selectorPath(el),
         label,
         pos: {
           x: Math.round(rect.left + rect.width  / 2),
@@ -90,6 +108,30 @@ window.OpheliaRecorder = (() => {
     chrome.storage.local.set({ [REC_KEY]: _state });
   }
 
+  // ── Meaningful target resolver ──────────────────────────────────────────
+  // When user clicks an <img> or <svg> inside a <button>, we want the button.
+  // Walk up to find the nearest interactive / labelled ancestor.
+
+  function meaningfulTarget(el) {
+    const GOOD_TAGS  = new Set(['button', 'a', 'input', 'select', 'textarea', 'label']);
+    const GOOD_ROLES = new Set(['button', 'link', 'menuitem', 'option', 'tab', 'checkbox', 'radio', 'switch', 'menuitemcheckbox', 'menuitemradio']);
+
+    // Original element already has a stable identifier → keep it
+    if (el.getAttribute('aria-label') || el.getAttribute('data-testid')) return el;
+
+    let cur = el;
+    while (cur && cur !== document.body) {
+      const tag  = (cur.tagName || '').toLowerCase();
+      const role = cur.getAttribute('role') || '';
+      if (GOOD_TAGS.has(tag) || GOOD_ROLES.has(role) ||
+          cur.getAttribute('aria-label') || cur.getAttribute('data-testid')) {
+        return cur;
+      }
+      cur = cur.parentElement;
+    }
+    return el; // fallback to original
+  }
+
   // ── Click capture ─────────────────────────────────────────────────────────
 
   function attachClicks() {
@@ -99,7 +141,9 @@ window.OpheliaRecorder = (() => {
       // Ignore clicks on Ophelia's own UI
       if (e.target.closest('#cross-tab-sphere, #ophelia-card, #ophelia-dot')) return;
 
-      const elInfo = extractElement(e.target);
+      // Use the nearest meaningful ancestor (e.g. button wrapping an img/svg)
+      const target = meaningfulTarget(e.target);
+      const elInfo = extractElement(target);
       if (!elInfo) return;
 
       const speech = consumeSpeech(6000);
@@ -191,14 +235,32 @@ window.OpheliaRecorder = (() => {
   // Only job: turn raw speech + element name into a clean one-sentence instruction.
 
   async function polishInstructions(steps) {
-    const lines = steps.map((s, i) =>
-      `${i + 1}. Element: "${s.element.label}" (${s.element.tag}) | User said: "${s.raw_instruction || 'nothing'}"`
-    ).join('\n');
+    const lines = steps.map((s, i) => {
+      const el = s.element;
+      const parts = [
+        `tag=${el.tag}`,
+        el.role          ? `role=${el.role}`              : null,
+        el.aria_label    ? `aria-label="${el.aria_label}"` : null,
+        el.text_content  ? `text="${el.text_content}"`     : null,
+        el.screen_region ? `position=${el.screen_region}`  : null
+      ].filter(Boolean).join(', ');
+      return (
+        `Step ${i + 1}:\n` +
+        `  Page URL : ${s.url}\n` +
+        `  Element  : ${parts}\n` +
+        `  User said: "${s.raw_instruction || '(silent)'}"` 
+      );
+    }).join('\n\n');
 
     const prompt =
-      `You are a UX writer for a browser tutorial tool. Given these recorded interaction steps, ` +
-      `write one short, clear, friendly instruction per step that tells another user what to do.\n\n` +
-      `Return ONLY a valid JSON array of strings — one string per step, same order. No markdown, no extra text.\n\n` +
+      `You are writing step-by-step tutorial instructions for a Chrome extension that guides users through websites.\n` +
+      `Each step is one recorded click. Use the element details and what the user said to write ONE concise, ` +
+      `friendly, specific sentence telling the user exactly what to click and roughly where it is on the page.\n` +
+      `Examples of good instructions:\n` +
+      `- "Click your profile picture in the top-right corner"\n` +
+      `- "Select 'Settings' from the dropdown menu"\n` +
+      `- "Click the Notifications toggle to turn it on"\n\n` +
+      `Return ONLY a valid JSON array of strings — one per step, same order. No markdown, no extra text.\n\n` +
       `Recorded steps:\n${lines}`;
 
     try {

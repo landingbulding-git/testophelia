@@ -2,9 +2,10 @@
 // Recording logic → recorder.js | Playback logic → player.js | Overlay UI → overlay.js
 (() => {
   // ── STT state ────────────────────────────────────────────────────────────
-  let recognition  = null;
-  let sttActive    = false;
-  let isListening  = false;
+  let recognition           = null;
+  let sttActive             = false;
+  let isListening           = false;
+  let _justStoppedRecording = false; // grace-period flag to silence tutor TTS
 
   // ── Gemini tutor state ───────────────────────────────────────────────────
   let geminiConfig = null;
@@ -70,6 +71,8 @@
         if (window.OpheliaRecorder.isActive()) {
           stopSTT();
           window.OpheliaRecorder.stop();
+          _justStoppedRecording = true;
+          setTimeout(() => { _justStoppedRecording = false; }, 3000);
         } else {
           window.OpheliaRecorder.start();
           startSTT(); // Mic on for speech → attached to each step
@@ -137,6 +140,8 @@
     if (window.OpheliaRecorder.isActive()) {
       stopSTT();
       window.OpheliaRecorder.stop();
+      _justStoppedRecording = true;
+      setTimeout(() => { _justStoppedRecording = false; }, 3000);
       return;
     }
     // Otherwise toggle conversational STT (Gemini tutor)
@@ -218,8 +223,8 @@
       // Always push to recorder buffer (no-op if not recording)
       window.OpheliaRecorder.pushSpeech(final);
 
-      // Only send to Gemini tutor when NOT recording
-      if (!window.OpheliaRecorder.isActive()) {
+      // Only send to Gemini tutor when NOT recording and not in grace period after stop
+      if (!window.OpheliaRecorder.isActive() && !_justStoppedRecording) {
         sendToTutor(final);
       }
     };
