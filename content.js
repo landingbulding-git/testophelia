@@ -1239,15 +1239,27 @@ Example output format:
     console.log('⏳ Waiting for user interaction with element...');
     
     return new Promise((resolve) => {
+      // Add visual feedback to element
+      element.style.outline = '3px solid #ff7a1a';
+      element.style.outlineOffset = '2px';
+      element.style.cursor = 'pointer';
+      
       const interactionHandler = (event) => {
-        console.log('✅ User interacted with element:', event.type);
+        console.log('✅ User interacted with element:', event.type, event.target);
+        
+        // Remove visual feedback
+        element.style.outline = '';
+        element.style.outlineOffset = '';
+        element.style.cursor = '';
         
         // Remove event listeners
         element.removeEventListener('click', interactionHandler);
+        element.removeEventListener('mousedown', interactionHandler);
+        element.removeEventListener('mouseup', interactionHandler);
         element.removeEventListener('change', interactionHandler);
         element.removeEventListener('input', interactionHandler);
         
-        // Stop pulsing animation
+        // Stop pulsing animation on sphere
         const sphere = document.getElementById('cross-tab-sphere');
         if (sphere) {
           sphere.style.animation = '';
@@ -1256,20 +1268,42 @@ Example output format:
         resolve();
       };
       
-      // Listen for various interaction events
-      element.addEventListener('click', interactionHandler);
-      element.addEventListener('change', interactionHandler);
-      element.addEventListener('input', interactionHandler);
+      // Listen for various interaction events on the element
+      element.addEventListener('click', interactionHandler, true);
+      element.addEventListener('mousedown', interactionHandler, true);
+      element.addEventListener('mouseup', interactionHandler, true);
+      element.addEventListener('change', interactionHandler, true);
+      element.addEventListener('input', interactionHandler, true);
       
-      // Also listen for navigation (if element is a link)
-      if (element.tagName === 'A') {
-        const navigationHandler = () => {
-          console.log('✅ User navigated via link');
-          element.removeEventListener('click', navigationHandler);
-          resolve();
-        };
-        element.addEventListener('click', navigationHandler);
-      }
+      // Also listen for any click in the document as fallback
+      const documentClickHandler = (event) => {
+        if (element.contains(event.target) || element === event.target) {
+          console.log('✅ User clicked within element:', event.target);
+          interactionHandler(event);
+        }
+      };
+      
+      document.addEventListener('click', documentClickHandler, true);
+      
+      // Cleanup function
+      const cleanup = () => {
+        element.removeEventListener('click', interactionHandler);
+        element.removeEventListener('mousedown', interactionHandler);
+        element.removeEventListener('mouseup', interactionHandler);
+        element.removeEventListener('change', interactionHandler);
+        element.removeEventListener('input', interactionHandler);
+        document.removeEventListener('click', documentClickHandler, true);
+        element.style.outline = '';
+        element.style.outlineOffset = '';
+        element.style.cursor = '';
+      };
+      
+      // Add timeout to prevent infinite wait
+      const timeout = setTimeout(() => {
+        console.log('⏱️ Timeout waiting for interaction, moving to next step');
+        cleanup();
+        resolve();
+      }, 30000); // 30 second timeout
     });
   }
   
