@@ -1174,13 +1174,18 @@ Example output format:
       }
     }
     
-    // Try to find by label/text content
+    // Try to find by label/text content (avoid HTML/BODY elements)
     if (!element && elementData.label) {
       const elements = document.querySelectorAll('*');
       for (const el of elements) {
+        // Skip HTML and BODY elements
+        if (el.tagName === 'HTML' || el.tagName === 'BODY') {
+          continue;
+        }
+        
         if (el.textContent && el.textContent.includes(elementData.label)) {
           element = el;
-          console.log('✅ Found element by label:', elementData.label);
+          console.log('✅ Found element by label:', elementData.label, el.tagName);
           break;
         }
       }
@@ -1213,6 +1218,13 @@ Example output format:
       sphere = createSphere();
     }
     
+    // Disable mouse following
+    isFollowing = false;
+    if (followTimeout) {
+      clearTimeout(followTimeout);
+      followTimeout = null;
+    }
+    
     // Position sphere at coordinates
     sphere.style.left = `${position.x}px`;
     sphere.style.top = `${position.y}px`;
@@ -1223,7 +1235,11 @@ Example output format:
     sphere.style.opacity = '1';
     sphere.style.animation = 'pulse 1s ease-in-out infinite';
     
-    console.log('✅ Pointer positioned');
+    // Remove any mouse event listeners that could cause following
+    sphere.removeEventListener('mouseenter', sphere.onmouseenter);
+    sphere.onmouseenter = null;
+    
+    console.log('✅ Pointer positioned (mouse following disabled)');
   }
   
   // Wait for user interaction with element
