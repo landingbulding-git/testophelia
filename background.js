@@ -28,7 +28,7 @@ chrome.commands.onCommand.addListener((command) => {
 });
 
 // Listen for tutorial URL clicks
-chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId === 0) { // Main frame only
     const url = new URL(details.url);
     
