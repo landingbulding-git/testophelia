@@ -33,7 +33,7 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
     const url = new URL(details.url);
     
     // Check if this is a tutorial URL
-    if (url.hostname === 'www.example.com' && url.pathname === '/tutorial') {
+    if (url.hostname === 'testophelia.vercel.app' && url.pathname === '/tutorial.html') {
       const sessionId = url.searchParams.get('id');
       if (sessionId) {
         console.log('🎯 Tutorial URL detected:', sessionId);

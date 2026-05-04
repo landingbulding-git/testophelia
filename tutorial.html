@@ -32,32 +32,30 @@
             margin: 20px 0;
             font-weight: bold;
         }
-        .loading {
-            background: #fff3cd;
-            color: #856404;
-        }
-        .success {
-            background: #d4edda;
-            color: #155724;
-        }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-        }
         .info {
             background: #d1ecf1;
             color: #0c5460;
             font-size: 14px;
+        }
+        .session-id {
+            background: #f8f9fa;
+            color: #495057;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            word-break: break-all;
+            margin: 10px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎯 Ophelia Tutorial</h1>
-        <div id="status" class="status loading">
-            Loading tutorial...
+        <div class="status info">
+            The Ophelia Chrome extension will automatically detect this URL and load the tutorial.
         </div>
-        <div id="info" class="status info">
+        <div id="sessionId" class="session-id"></div>
+        <div class="status info">
             Make sure the Ophelia Chrome extension is installed and enabled.
         </div>
     </div>
@@ -68,31 +66,9 @@
         const sessionId = urlParams.get('id');
 
         if (sessionId) {
-            // Send message to extension to load tutorial
-            if (typeof chrome !== 'undefined' && chrome.runtime) {
-                chrome.runtime.sendMessage({
-                    action: 'loadTutorial',
-                    sessionId: sessionId
-                }, (response) => {
-                    const statusDiv = document.getElementById('status');
-                    if (chrome.runtime.lastError) {
-                        statusDiv.className = 'status error';
-                        statusDiv.textContent = 'Extension not detected. Please install the Ophelia Chrome extension.';
-                    } else if (response && response.success) {
-                        statusDiv.className = 'status success';
-                        statusDiv.textContent = 'Tutorial loaded! Executing steps...';
-                    } else {
-                        statusDiv.className = 'status error';
-                        statusDiv.textContent = 'Failed to load tutorial.';
-                    }
-                });
-            } else {
-                document.getElementById('status').className = 'status error';
-                document.getElementById('status').textContent = 'Chrome extension not detected. Please install the Ophelia extension.';
-            }
+            document.getElementById('sessionId').textContent = `Session ID: ${sessionId}`;
         } else {
-            document.getElementById('status').className = 'status error';
-            document.getElementById('status').textContent = 'No tutorial ID provided.';
+            document.getElementById('sessionId').textContent = 'No tutorial ID provided.';
         }
     </script>
 </body>
