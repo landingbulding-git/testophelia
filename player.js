@@ -473,5 +473,5 @@ window.OpheliaPlayer = (() => {
     checkForPending();
   }
 
-  return { loadAndStart, checkForPending, stop };
+  return { loadAndStart, checkForPending, stop, findElement };
 })();

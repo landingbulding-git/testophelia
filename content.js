@@ -6,6 +6,7 @@
   let sttActive             = false;
   let isListening           = false;
   let _justStoppedRecording = false; // grace-period flag to silence tutor TTS
+  let _askMode              = false; // waiting for user to speak a request to the assistant
 
   // ── Gemini tutor state ───────────────────────────────────────────────────
   let geminiConfig = null;
@@ -136,7 +137,7 @@
   }
 
   function handleSphereClick() {
-    // During recording, sphere click = stop recording
+    // During recording → stop
     if (window.OpheliaRecorder.isActive()) {
       stopSTT();
       window.OpheliaRecorder.stop();
@@ -144,12 +145,29 @@
       setTimeout(() => { _justStoppedRecording = false; }, 3000);
       return;
     }
-    // Otherwise toggle conversational STT (Gemini tutor)
-    if (isListening) {
+    // Assistant running → stop
+    if (window.OpheliaAssistant?.isActive()) {
+      window.OpheliaAssistant.stop();
+      _askMode = false;
       stopSTT();
-    } else {
-      startSTT();
+      return;
     }
+    // Toggle ask-mode: sphere turns blue, next speech fires the assistant
+    if (_askMode) {
+      _askMode = false;
+      stopSTT();
+      _setSphereColor('#ff7a1a');
+      return;
+    }
+    _askMode = true;
+    startSTT();
+    _setSphereColor('#4285f4');
+    window.OpheliaNotify('💬 What do you need help with? Speak now…', 'info');
+  }
+
+  function _setSphereColor(color) {
+    const sphere = document.getElementById('cross-tab-sphere');
+    if (sphere) sphere.style.background = color;
   }
 
   function setupMouseFollowing(sphere) {
@@ -223,8 +241,16 @@
       // Always push to recorder buffer (no-op if not recording)
       window.OpheliaRecorder.pushSpeech(final);
 
-      // Only send to Gemini tutor when NOT recording and not in grace period after stop
-      if (!window.OpheliaRecorder.isActive() && !_justStoppedRecording) {
+      // Route speech to the right consumer
+      if (window.OpheliaRecorder.isActive()) {
+        // already pushed above
+      } else if (_askMode && window.OpheliaAssistant) {
+        // First speech in ask-mode → fire the assistant, exit ask-mode
+        _askMode = false;
+        stopSTT();
+        _setSphereColor('#ff7a1a');
+        window.OpheliaAssistant.ask(final);
+      } else if (!_justStoppedRecording) {
         sendToTutor(final);
       }
     };
