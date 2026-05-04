@@ -47,6 +47,9 @@
   let clickListener = null;
   let navigationListener = null;
   
+  // Tutorial mode flag - disables mouse following
+  let tutorialModeActive = false;
+  
   // Wait for DOM to be ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeSphere);
@@ -664,10 +667,10 @@
   function checkForPendingTutorial() {
     chrome.storage.local.get(['pendingTutorial'], (result) => {
       if (result.pendingTutorial) {
-        console.log('🔄 Found pending tutorial, executing...');
-        executeTutorial(result.pendingTutorial);
-        // Clear pending tutorial after starting execution
+        const { steps, stepIndex = 0 } = result.pendingTutorial;
+        console.log(`🔄 Found pending tutorial, resuming from step ${stepIndex + 1}/${steps.length}...`);
         chrome.storage.local.remove('pendingTutorial');
+        executeTutorial(steps, null, stepIndex);
       }
     });
   }
@@ -712,7 +715,8 @@
     
     // Smooth following animation
     function animate() {
-      if (isFollowing) {
+      // Do not move sphere during tutorial mode
+      if (!tutorialModeActive && isFollowing) {
         // Calculate target position with offset from mouse
         // Position sphere to the bottom-right of mouse cursor
         const targetX = mouseX + offsetDistance;
@@ -1095,131 +1099,140 @@ Example output format:
   }
   
   // Execute tutorial steps
-  async function executeTutorial(tutorialSteps, entryUrl = null) {
+  async function executeTutorial(tutorialSteps, entryUrl = null, startIndex = 0) {
     try {
-      console.log('🚀 Executing tutorial steps in simplified guided mode...');
+      console.log('🚀 Starting guided tutorial...');
       
-      // Navigate to entry URL if provided
-      if (entryUrl) {
+      // Navigate to entry URL if provided (only on first load, startIndex === 0)
+      if (entryUrl && startIndex === 0) {
         console.log('🌐 Navigating to entry URL:', entryUrl);
-        
-        // Store tutorial steps in storage for execution after navigation
-        chrome.storage.local.set({ 'pendingTutorial': tutorialSteps });
-        console.log('💾 Tutorial steps stored for post-navigation execution');
-        
-        // Send message to background script to navigate
-        chrome.runtime.sendMessage({ action: 'navigate', url: entryUrl }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('❌ Navigation message failed:', chrome.runtime.lastError);
-          } else {
-            console.log('✅ Navigation message sent');
-          }
-        });
-        
-        // Don't execute steps here - they will be executed on the new page
+        chrome.storage.local.set({ 'pendingTutorial': { steps: tutorialSteps, stepIndex: 0 } });
+        chrome.runtime.sendMessage({ action: 'navigate', url: entryUrl });
         return;
       }
       
-      // Stop pointer from following mouse
-      window.isSphereFollowing = false;
-      console.log('🛑 Pointer stopped following mouse');
+      // Activate tutorial mode - disables mouse following
+      tutorialModeActive = true;
+      console.log('🛑 Tutorial mode ON - pointer will not follow mouse');
       
-      // Execute tutorial step by step
-      for (let i = 0; i < tutorialSteps.length; i++) {
+      // Run steps starting from startIndex
+      for (let i = startIndex; i < tutorialSteps.length; i++) {
         const step = tutorialSteps[i];
-        console.log(`📍 Step ${i + 1}: ${step.instruction}`);
-        
-        // Get element data from step (handle different structures)
         const elementData = step.dom_element || step;
+        const stepUrl = step.data?.url || step.url || null;
         
-        // Use label, tag, and position to find element (injected IDs won't exist on user's page)
-        console.log('🔍 Looking for element with:', {
-          label: elementData.label,
-          tag: elementData.tag,
-          position: elementData.position
-        });
+        console.log(`📍 Step ${i + 1}/${tutorialSteps.length}: "${step.instruction}"`);
+        showSTTNotification(`Step ${i + 1}: ${step.instruction}`, 'info');
         
-        // Wait a bit for DOM to be ready
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait for DOM to settle
+        await new Promise(resolve => setTimeout(resolve, 800));
         
-        // Find element by label, tag, and position
+        // Find element using 4-tier strategy
         const element = await findElementByAttributes(elementData);
         
-        if (element) {
-          console.log('✅ Found element in DOM:', element);
-          
-          // Get element position
-          const rect = element.getBoundingClientRect();
-          const position = {
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2
-          };
-          
-          console.log('🎯 Element position:', position);
-          
-          // Position pointer at element location
-          await positionPointerAt(position);
-          
-          // Highlight element
-          element.style.outline = '3px solid #ff7a1a';
-          element.style.outlineOffset = '2px';
-          
-          console.log('⏳ Waiting for user interaction...');
-          
-          // Wait for user to interact (simple approach)
-          await waitForUserInteractionSimple(element);
-          
-          // Remove highlight
-          element.style.outline = '';
-          element.style.outlineOffset = '';
-          
-          console.log('✅ User interacted, moving to next step');
-        } else {
-          console.warn('⚠️ Element not found in DOM with attributes:', elementData);
-          showSTTNotification(`Could not find element: ${elementData.label}`, 'warning');
-          
-          // DO NOT proceed to next step - wait for manual user action
-          console.log('⏸️ Tutorial paused - waiting for manual user action');
-          showSTTNotification('Tutorial paused - please complete step manually', 'error');
-          
-          // Wait indefinitely until user manually completes the step
-          await new Promise(resolve => {
-            const checkInterval = setInterval(() => {
-              // Check if element is now found
-              const foundElement = findElementByAttributes(elementData);
-              if (foundElement) {
-                clearInterval(checkInterval);
-                resolve();
-              }
-            }, 2000); // Check every 2 seconds
-          });
-          
-          // After finding element, wait for interaction
-          console.log('✅ Element found, waiting for interaction');
-          const foundElement = await findElementByAttributes(elementData);
-          if (foundElement) {
-            const rect = foundElement.getBoundingClientRect();
-            const position = {
-              x: rect.left + rect.width / 2,
-              y: rect.top + rect.height / 2
-            };
-            await positionPointerAt(position);
-            foundElement.style.outline = '3px solid #ff7a1a';
-            foundElement.style.outlineOffset = '2px';
-            await waitForUserInteractionSimple(foundElement);
-            foundElement.style.outline = '';
-            foundElement.style.outlineOffset = '';
+        if (!element) {
+          console.warn(`⚠️ Step ${i + 1}: element not found, retrying in 2s...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const retryElement = await findElementByAttributes(elementData);
+          if (!retryElement) {
+            console.warn(`⚠️ Step ${i + 1}: still not found, skipping`);
+            continue;
           }
+        }
+        
+        const foundElement = element || await findElementByAttributes(elementData);
+        if (!foundElement) continue;
+        
+        // Pin pointer to element
+        const rect = foundElement.getBoundingClientRect();
+        positionPointerAt({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2
+        });
+        
+        // Highlight element
+        const prevOutline = foundElement.style.outline;
+        const prevOffset = foundElement.style.outlineOffset;
+        foundElement.style.outline = '3px solid #ff7a1a';
+        foundElement.style.outlineOffset = '2px';
+        
+        console.log(`⏳ Step ${i + 1}: waiting for user interaction...`);
+        
+        // Wait for user interaction - returns whether page navigated
+        const navigated = await waitForInteractionOrNavigation(foundElement);
+        
+        // Remove highlight
+        foundElement.style.outline = prevOutline;
+        foundElement.style.outlineOffset = prevOffset;
+        
+        console.log(`✅ Step ${i + 1} done`);
+        
+        // If the page navigated, persist remaining steps and stop here
+        if (navigated) {
+          const nextIndex = i + 1;
+          if (nextIndex < tutorialSteps.length) {
+            console.log(`🌐 Page navigated - storing remaining steps from index ${nextIndex}`);
+            chrome.storage.local.set({ 'pendingTutorial': { steps: tutorialSteps, stepIndex: nextIndex } });
+          }
+          return;
         }
       }
       
-      console.log('✅ Tutorial execution complete');
-      showSTTNotification('Tutorial execution complete', 'success');
+      // Tutorial complete
+      tutorialModeActive = false;
+      console.log('✅ Tutorial complete!');
+      showSTTNotification('Tutorial complete! 🎉', 'success');
+      
+      // Restore sphere to default position
+      const sphere = document.getElementById('cross-tab-sphere');
+      if (sphere) {
+        sphere.style.animation = '';
+        sphere.style.left = 'auto';
+        sphere.style.top = 'auto';
+        sphere.style.bottom = '20px';
+        sphere.style.right = '20px';
+      }
       
     } catch (error) {
       console.error('❌ Tutorial execution failed:', error);
-      showSTTNotification(`Tutorial execution error: ${error.message}`, 'error');
+      showSTTNotification(`Tutorial error: ${error.message}`, 'error');
     }
+  }
+  
+  // Wait for user interaction - resolves with boolean indicating if page navigated
+  async function waitForInteractionOrNavigation(element) {
+    return new Promise((resolve) => {
+      const startUrl = window.location.href;
+      let done = false;
+      
+      const finish = (navigated) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener('click', clickHandler, true);
+        clearInterval(navCheck);
+        resolve(navigated);
+      };
+      
+      // Listen for any click anywhere in the document
+      const clickHandler = (e) => {
+        console.log('🖱️ Click detected on:', e.target.tagName);
+        // Small delay to allow navigation to start
+        setTimeout(() => {
+          const navigated = window.location.href !== startUrl;
+          finish(navigated);
+        }, 200);
+      };
+      
+      document.addEventListener('click', clickHandler, true);
+      
+      // Also poll for URL change (for programmatic navigations)
+      const navCheck = setInterval(() => {
+        if (window.location.href !== startUrl) {
+          console.log('🌐 URL changed detected by poll');
+          finish(true);
+        }
+      }, 300);
+    });
   }
   
   // Find element by attributes using 4-tier semantic fallback strategy
@@ -1315,118 +1328,27 @@ Example output format:
   }
   
   // Position pointer (sphere) at specific coordinates
-  async function positionPointerAt(position) {
+  function positionPointerAt(position) {
     console.log('🎯 Positioning pointer at:', position);
+    
+    // Globally disable mouse following animation loop
+    tutorialModeActive = true;
     
     // Get or create sphere
     let sphere = document.getElementById('cross-tab-sphere');
-    if (!sphere) {
-      sphere = createSphere();
-    }
+    if (!sphere) return;
     
-    // Disable mouse following globally and on sphere
-    window.isSphereFollowing = false;
-    sphere.style.cursor = 'default';
-    
-    // Position sphere at coordinates
+    // Fix sphere position
     sphere.style.left = `${position.x}px`;
     sphere.style.top = `${position.y}px`;
+    sphere.style.bottom = 'auto';
+    sphere.style.right = 'auto';
     sphere.style.position = 'fixed';
     sphere.style.zIndex = '10000';
-    
-    // Make sphere visible and pulse to draw attention
     sphere.style.opacity = '1';
     sphere.style.animation = 'pulse 1s ease-in-out infinite';
     
-    // Remove any mouse event listeners that could cause following
-    sphere.onmouseenter = null;
-    sphere.onmousemove = null;
-    
-    console.log('✅ Pointer positioned (mouse following disabled)');
-  }
-  
-  // Wait for user interaction with element (simple approach)
-  async function waitForUserInteractionSimple(element) {
-    console.log('⏳ Waiting for user interaction (simple mode)...');
-    
-    return new Promise((resolve) => {
-      let interactionDetected = false;
-      
-      const interactionHandler = (event) => {
-        if (interactionDetected) return;
-        
-        // Check if the click was on or inside the element
-        if (element.contains(event.target) || element === event.target) {
-          interactionDetected = true;
-          console.log('✅ User clicked on element:', event.target);
-          
-          // Remove event listener
-          document.removeEventListener('click', interactionHandler, true);
-          
-          // Stop pulsing animation on sphere
-          const sphere = document.getElementById('cross-tab-sphere');
-          if (sphere) {
-            sphere.style.animation = '';
-          }
-          
-          resolve();
-        }
-      };
-      
-      // Listen for clicks on the document (capture phase)
-      document.addEventListener('click', interactionHandler, true);
-      
-      // Timeout after 15 seconds
-      setTimeout(() => {
-        if (!interactionDetected) {
-          console.log('⏱️ Timeout, moving to next step');
-          document.removeEventListener('click', interactionHandler, true);
-          resolve();
-        }
-      }, 15000);
-    });
-  }
-  
-  // Send static data to Firebase using REST API (legacy function)
-  async function sendStaticDataToFirebase() {
-    try {
-      console.log('📤 Sending static data to Firebase via REST API...');
-      
-      // Static data to send permanently
-      const staticData = {
-        fields: {
-          timestamp: { stringValue: new Date().toISOString() },
-          message: { stringValue: 'Ophelia extension data' },
-          url: { stringValue: window.location.href },
-          userAgent: { stringValue: navigator.userAgent },
-          domElements: { integerValue: domScanResult ? domScanResult.elements.length : 0 }
-        }
-      };
-      
-      // Firebase REST API endpoint with API key as query parameter
-      const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/ophelia_data?key=${firebaseConfig.apiKey}`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(staticData)
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
-      }
-      
-      const result = await response.json();
-      console.log('✅ Data sent to Firebase with ID:', result.name);
-      showSTTNotification(`Data sent to Firebase: ${result.name.split('/').pop()}`, 'success');
-      
-    } catch (error) {
-      console.error('❌ Failed to send data to Firebase:', error);
-      showSTTNotification(`Firebase error: ${error.message}`, 'error');
-    }
+    console.log('✅ Pointer pinned at element (mouse following disabled)');
   }
   
   // Send STT result to Gemini Tutor
