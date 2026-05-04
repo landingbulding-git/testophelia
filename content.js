@@ -1088,7 +1088,7 @@ Example output format:
   // Execute tutorial steps
   async function executeTutorial(tutorialSteps, entryUrl = null) {
     try {
-      console.log('🚀 Executing tutorial steps...');
+      console.log('🚀 Executing tutorial steps in guided mode...');
       
       // Navigate to entry URL if provided
       if (entryUrl) {
@@ -1111,15 +1111,43 @@ Example output format:
         return;
       }
       
-      // Execute each tutorial step (only if no navigation)
+      // Execute tutorial in guided mode (step by step)
       for (let i = 0; i < tutorialSteps.length; i++) {
         const step = tutorialSteps[i];
         console.log(`📍 Step ${i + 1}: ${step.instruction}`);
         
-        await interactWithElement(step);
+        // Get element data from step (handle different structures)
+        const elementData = step.dom_element || step;
         
-        // Wait between steps
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Find matching element in current DOM
+        const matchedElement = await findMatchingElement(elementData);
+        
+        if (matchedElement) {
+          console.log('✅ Found matching element:', matchedElement);
+          
+          // Get element position
+          const rect = matchedElement.getBoundingClientRect();
+          const position = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          };
+          
+          console.log('🎯 Element position:', position);
+          
+          // Position pointer at element location
+          await positionPointerAt(position);
+          
+          // Wait for user interaction
+          await waitForUserInteraction(matchedElement);
+          
+          console.log('✅ User interacted with element');
+        } else {
+          console.warn('⚠️ Could not find matching element for step:', step);
+          showSTTNotification(`Could not find element: ${step.instruction}`, 'warning');
+        }
+        
+        // Wait before next step
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
       
       console.log('✅ Tutorial execution complete');
@@ -1131,62 +1159,110 @@ Example output format:
     }
   }
   
-  // Interact with DOM element
-  async function interactWithElement(stepData) {
-    try {
-      console.log('🎯 Interacting with element:', stepData);
-      
-      // Extract element data from step (handle different structures)
-      const elementData = stepData.dom_element || stepData;
-      
-      let element = null;
-      
-      // Try to find element by ID
-      if (elementData.id) {
-        element = document.getElementById(elementData.id);
-      }
-      
-      // Try to find by label
-      if (!element && elementData.label) {
-        const elements = document.querySelectorAll('*');
-        for (const el of elements) {
-          if (el.textContent.includes(elementData.label)) {
-            element = el;
-            break;
-          }
-        }
-      }
-      
-      // Try to find by tag and position
-      if (!element && elementData.tag && elementData.position) {
-        const elements = document.getElementsByTagName(elementData.tag);
-        for (const el of elements) {
-          const rect = el.getBoundingClientRect();
-          if (Math.abs(rect.left - elementData.position.x) < 50 && 
-              Math.abs(rect.top - elementData.position.y) < 50) {
-            element = el;
-            break;
-          }
-        }
-      }
-      
+  // Find matching element in current DOM
+  async function findMatchingElement(elementData) {
+    console.log('🔍 Finding matching element:', elementData);
+    
+    let element = null;
+    
+    // Try to find element by ID
+    if (elementData.id) {
+      element = document.getElementById(elementData.id);
       if (element) {
-        // Click on element
-        element.click();
-        console.log('✅ Clicked on element:', element);
-        
-        // Visual feedback
-        element.style.outline = '3px solid #ff7a1a';
-        setTimeout(() => {
-          element.style.outline = '';
-        }, 1000);
-      } else {
-        console.warn('⚠️ Element not found:', elementData);
+        console.log('✅ Found element by ID:', elementData.id);
+        return element;
       }
-      
-    } catch (error) {
-      console.error('❌ Failed to interact with element:', error);
     }
+    
+    // Try to find by label/text content
+    if (!element && elementData.label) {
+      const elements = document.querySelectorAll('*');
+      for (const el of elements) {
+        if (el.textContent && el.textContent.includes(elementData.label)) {
+          element = el;
+          console.log('✅ Found element by label:', elementData.label);
+          break;
+        }
+      }
+    }
+    
+    // Try to find by tag and position
+    if (!element && elementData.tag && elementData.position) {
+      const elements = document.getElementsByTagName(elementData.tag);
+      for (const el of elements) {
+        const rect = el.getBoundingClientRect();
+        if (Math.abs(rect.left - elementData.position.x) < 50 && 
+            Math.abs(rect.top - elementData.position.y) < 50) {
+          element = el;
+          console.log('✅ Found element by tag and position:', elementData.tag);
+          break;
+        }
+      }
+    }
+    
+    return element;
+  }
+  
+  // Position pointer (sphere) at specific coordinates
+  async function positionPointerAt(position) {
+    console.log('🎯 Positioning pointer at:', position);
+    
+    // Get or create sphere
+    let sphere = document.getElementById('cross-tab-sphere');
+    if (!sphere) {
+      sphere = createSphere();
+    }
+    
+    // Position sphere at coordinates
+    sphere.style.left = `${position.x}px`;
+    sphere.style.top = `${position.y}px`;
+    sphere.style.position = 'fixed';
+    sphere.style.zIndex = '10000';
+    
+    // Make sphere visible and pulse to draw attention
+    sphere.style.opacity = '1';
+    sphere.style.animation = 'pulse 1s ease-in-out infinite';
+    
+    console.log('✅ Pointer positioned');
+  }
+  
+  // Wait for user interaction with element
+  async function waitForUserInteraction(element) {
+    console.log('⏳ Waiting for user interaction with element...');
+    
+    return new Promise((resolve) => {
+      const interactionHandler = (event) => {
+        console.log('✅ User interacted with element:', event.type);
+        
+        // Remove event listeners
+        element.removeEventListener('click', interactionHandler);
+        element.removeEventListener('change', interactionHandler);
+        element.removeEventListener('input', interactionHandler);
+        
+        // Stop pulsing animation
+        const sphere = document.getElementById('cross-tab-sphere');
+        if (sphere) {
+          sphere.style.animation = '';
+        }
+        
+        resolve();
+      };
+      
+      // Listen for various interaction events
+      element.addEventListener('click', interactionHandler);
+      element.addEventListener('change', interactionHandler);
+      element.addEventListener('input', interactionHandler);
+      
+      // Also listen for navigation (if element is a link)
+      if (element.tagName === 'A') {
+        const navigationHandler = () => {
+          console.log('✅ User navigated via link');
+          element.removeEventListener('click', navigationHandler);
+          resolve();
+        };
+        element.addEventListener('click', navigationHandler);
+      }
+    });
   }
   
   // Send static data to Firebase using REST API (legacy function)
