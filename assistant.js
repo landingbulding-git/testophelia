@@ -153,7 +153,7 @@ window.OpheliaAssistant = (() => {
       return;
     }
 
-    console.log(`✅ Assistant plan: ${plan.steps.length} step(s)`);
+    console.log(`✅ Assistant plan: ${plan.steps.length} step(s)`, plan.steps.map((s,i) => `${i+1}. ${s.instruction}`));
 
     // Save for cross-page resume
     chrome.storage.local.set({ [ASSIST_KEY]: { steps: plan.steps, stepIndex: 0, userRequest: request } });
@@ -226,18 +226,27 @@ window.OpheliaAssistant = (() => {
   async function generatePlan(request, ctx) {
     const elStr = _formatElements(ctx.elements);
     const prompt =
-      `You are a browser step-by-step guide generator. Output ONLY a JSON object — no prose, no markdown.\n\n` +
+      `You are a browser automation assistant. Your job is to break a user goal into EVERY individual click/action needed to complete it.\n\n` +
       `Current page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n\n` +
-      `Interactive elements visible on this page (copy attribute values exactly as shown):\n${elStr}\n\n` +
-      `User wants: "${request}"\n\n` +
-      `STRICT RULES:\n` +
-      `1. Only use elements listed above. Copy aria_label / text_content verbatim.\n` +
-      `2. Each step = one click/action. Keep instructions under 12 words.\n` +
-      `3. If a click will open a menu with NEW elements needed later, that click is its own step.\n` +
-      `4. element can be null only for navigation-wait steps.\n\n` +
-      `OUTPUT FORMAT (JSON only, no other text):\n` +
-      `{"possible":true,"steps":[{"instruction":"SHORT sentence","element":{"tag":"","aria_label":"","text_content":"","role":""}}]}\n` +
-      `If impossible: {"possible":false,"message":"one short sentence reason"}`;
+      `Visible interactive elements (copy attribute values EXACTLY — do not invent values):\n${elStr}\n\n` +
+      `User goal: "${request}"\n\n` +
+      `CRITICAL RULES — read carefully:\n` +
+      `1. List EVERY step. Do NOT collapse multiple clicks into one step. If the path is: open menu → pick item → toggle setting, that is 3 separate steps.\n` +
+      `2. Each step = exactly one user action (one click, one keystroke, one selection).\n` +
+      `3. If clicking an element will open a dropdown/dialog/menu, that click is its OWN step. The items inside the dropdown will appear AFTER that click, so they don't need to be in the current element list.\n` +
+      `4. Most real browser tasks need 3–8 steps. Single-step responses are almost always wrong unless the goal truly is one click.\n` +
+      `5. Use ONLY elements from the list. Copy their aria_label or text_content verbatim. null out fields you don't have.\n` +
+      `6. element may be null only for a "wait for page to load" step.\n` +
+      `7. Instructions must be short, plain English (under 10 words).\n\n` +
+      `Example of correct multi-step output for "turn off autoplay":\n` +
+      `{"possible":true,"steps":[\n` +
+      `  {"instruction":"Click your account icon","element":{"tag":"button","aria_label":"Account","text_content":null,"role":null}},\n` +
+      `  {"instruction":"Click Settings","element":{"tag":"a","aria_label":null,"text_content":"Settings","role":"menuitem"}},\n` +
+      `  {"instruction":"Click Playback and performance","element":{"tag":"div","aria_label":null,"text_content":"Playback and performance","role":null}},\n` +
+      `  {"instruction":"Toggle off Autoplay","element":{"tag":"button","aria_label":"Autoplay is on","text_content":null,"role":"switch"}}\n` +
+      `]}\n\n` +
+      `Now produce the JSON for the user goal above. Output ONLY the JSON object, no markdown, no prose.\n` +
+      `If the goal is truly impossible on this page: {"possible":false,"message":"brief reason"}`;
     return callGemini(prompt);
   }
 
