@@ -17,6 +17,18 @@ chrome.commands.onCommand.addListener((command) => {
 
 // ── Messages from content scripts ─────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Screenshot for the live agent
+  if (request.action === 'captureTab') {
+    chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 70 }, dataUrl => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ error: chrome.runtime.lastError.message });
+      } else {
+        sendResponse({ dataUrl });
+      }
+    });
+    return true; // keep channel open for async response
+  }
+
   if (request.action === 'navigate') {
     // Navigate the sender's tab to the requested URL
     const tabId = sender.tab?.id;

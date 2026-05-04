@@ -23,7 +23,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "overlay.js", "recorder.js", "player.js", "assistant.js", "content.js"],
+      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "overlay.js", "recorder.js", "player.js", "agent-panel.js", "assistant.js", "content.js"],
       "run_at": "document_end"
     }
   ],

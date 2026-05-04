@@ -1,174 +1,298 @@
-// Ophelia Assistant — AI-driven live page helper
-// Ctrl+Shift+U → own dialog (own mic) → scan DOM → Gemini plan → OpheliaPlayer.playSteps()
-// Completely independent of content.js STT routing.
+// Ophelia Intelligent Agent — continuous screen-aware browser co-pilot
+// Ctrl+Shift+U → goal dialog → screenshot + DOM → Claude → next step → highlight → wait → repeat
+// Multi-turn conversation: Claude remembers what's been done and adapts to page changes.
 window.OpheliaAssistant = (() => {
-  const GM_WORKER     = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev';
-  const CLAUDE_WORKER = `${GM_WORKER}/claude`;
-  const ASSIST_KEY    = 'opheliaAssistant'; // cross-page persistence for navigation resume
+  const CLAUDE_WORKER = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
+  const MAX_HISTORY   = 8; // keep last N messages to bound token cost
 
-  let _active      = false;
-  let _userRequest = '';
+  let _goal      = '';
+  let _messages  = []; // multi-turn conversation history
+  let _active    = false;
+  let _stepCount = 0;
+  let _waitingForAction = false;
+  let _cleanupFns = []; // teardown callbacks for event listeners / timers
+  let _highlightedEl = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  // activate(): show the input dialog. Called by Ctrl+Shift+U.
   function activate() {
-    if (window.opheliaTutorialActive) {
-      // A tutorial or previous assistant run is active — stop it first
-      window.OpheliaPlayer?.stop();
-    }
-    _showDialog();
+    if (_active) { stop(); return; }
+    if (window.opheliaTutorialActive) window.OpheliaPlayer?.stop();
+    _showGoalDialog();
   }
 
   function stop() {
-    _closeDialog();
-    chrome.storage.local.remove(ASSIST_KEY);
     _active = false;
+    _waitingForAction = false;
+    _cleanupFns.forEach(fn => fn());
+    _cleanupFns = [];
+    _clearHighlight();
+    window.OpheliaAgentPanel?.hide();
+    window.speechSynthesis?.cancel();
+    _goal = ''; _messages = []; _stepCount = 0;
   }
 
   function isActive() { return _active; }
 
-  // ── Input dialog ──────────────────────────────────────────────────────────
-  // Completely self-contained: own STT recognition instance, no shared state.
+  // ── Goal input dialog ───────────────────────────────────────────────────────
 
-  function _showDialog() {
-    _closeDialog();
+  function _showGoalDialog() {
+    document.getElementById('ophelia-goal-dlg')?.remove();
 
     const dlg = document.createElement('div');
-    dlg.id = 'ophelia-ask-dialog';
+    dlg.id = 'ophelia-goal-dlg';
     dlg.style.cssText = [
-      'position:fixed', 'top:50%', 'left:50%',
-      'transform:translate(-50%,-50%)',
-      'background:rgba(14,14,14,0.98)',
-      'border:1.5px solid #4285f4',
-      'border-radius:16px', 'padding:24px 26px',
-      'width:400px', 'max-width:calc(100vw - 40px)',
-      'color:#fff', 'z-index:2147483647',
-      'box-shadow:0 16px 56px rgba(0,0,0,0.75)',
-      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-      'animation:opheliaCardIn 0.2s ease-out'
+      'position:fixed','top:50%','left:50%','transform:translate(-50%,-50%)',
+      'background:rgba(9,9,13,0.98)','border:1.5px solid #4285f4',
+      'border-radius:16px','padding:24px 26px','width:430px',
+      'max-width:calc(100vw - 40px)','color:#fff','z-index:2147483647',
+      'box-shadow:0 20px 64px rgba(0,0,0,0.85)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'
     ].join(';');
 
     dlg.innerHTML = `
-      <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
-                  color:#4285f4;margin-bottom:10px">🤖 Ophelia Assistant</div>
-      <div style="font-size:15px;color:#e8e8e8;margin-bottom:16px;line-height:1.4">
-        What do you need help with on this page?
+      <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#4285f4;
+                  text-transform:uppercase;margin-bottom:10px">🤖 Ophelia Agent</div>
+      <div style="font-size:15px;color:#e8e8e8;margin-bottom:4px">What do you want to accomplish?</div>
+      <div style="font-size:12px;color:#555;margin-bottom:16px">
+        I'll watch your screen and guide you step by step, adapting as you go.
       </div>
       <div style="display:flex;gap:8px;align-items:center">
-        <input id="ophelia-ask-input" type="text" placeholder="Describe your goal…"
-          autocomplete="off" style="flex:1;background:rgba(255,255,255,0.07);
-          border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px 14px;
-          color:#fff;font-size:14px;font-family:inherit;outline:none;
-          transition:border-color .15s" />
-        <button id="ophelia-ask-mic" title="Click to speak"
+        <input id="ophelia-gdlg-input" type="text"
+          placeholder="e.g. Change my profile picture on Facebook"
+          autocomplete="off"
+          style="flex:1;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.18);
+                 border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;
+                 font-family:inherit;outline:none"/>
+        <button id="ophelia-gdlg-mic"
           style="background:rgba(66,133,244,0.12);border:1.5px solid #4285f4;
-          border-radius:8px;padding:9px 11px;cursor:pointer;font-size:17px;
-          transition:background .15s;flex-shrink:0">🎤</button>
-        <button id="ophelia-ask-go"
+                 border-radius:8px;padding:9px 11px;cursor:pointer;font-size:17px;flex-shrink:0">🎤</button>
+        <button id="ophelia-gdlg-go"
           style="background:#4285f4;border:none;border-radius:8px;padding:10px 18px;
-          cursor:pointer;color:#fff;font-size:14px;font-weight:600;
-          font-family:inherit;flex-shrink:0;transition:opacity .15s">Go →</button>
+                 cursor:pointer;color:#fff;font-size:14px;font-weight:600;
+                 font-family:inherit;flex-shrink:0">Start →</button>
       </div>
-      <div id="ophelia-ask-status"
-        style="font-size:11px;color:#888;margin-top:8px;min-height:14px"></div>
+      <div id="ophelia-gdlg-status" style="font-size:11px;color:#555;margin-top:8px;min-height:14px"></div>
     `;
     document.body.appendChild(dlg);
 
-    const input  = dlg.querySelector('#ophelia-ask-input');
-    const micBtn = dlg.querySelector('#ophelia-ask-mic');
-    const goBtn  = dlg.querySelector('#ophelia-ask-go');
-    const status = dlg.querySelector('#ophelia-ask-status');
+    const input  = dlg.querySelector('#ophelia-gdlg-input');
+    const micBtn = dlg.querySelector('#ophelia-gdlg-mic');
+    const goBtn  = dlg.querySelector('#ophelia-gdlg-go');
+    const status = dlg.querySelector('#ophelia-gdlg-status');
 
     input.focus();
 
-    // Submit on Enter or Go button
     const submit = () => {
-      const text = input.value.trim();
-      if (!text) { input.style.borderColor = '#f44336'; return; }
-      _closeDialog();
-      _processRequest(text);
+      const goal = input.value.trim();
+      if (!goal) { input.style.borderColor = '#f44336'; return; }
+      dlg.remove();
+      _startSession(goal);
     };
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') _closeDialog(); });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') dlg.remove(); });
     goBtn.addEventListener('click', submit);
 
-    // Dedicated one-shot mic — completely separate from content.js STT
-    let _micRec = null;
+    let mic = null;
     micBtn.addEventListener('click', () => {
-      if (_micRec) { _micRec.stop(); _micRec = null; micBtn.textContent = '🎤'; return; }
+      if (mic) { mic.stop(); mic = null; micBtn.textContent = '🎤'; return; }
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { status.textContent = 'Speech not supported in this browser.'; return; }
-      _micRec = new SR();
-      _micRec.continuous = false;
-      _micRec.interimResults = true;
-      _micRec.lang = 'en-US';
-      _micRec.onstart  = () => { micBtn.textContent = '🔴'; status.textContent = 'Listening…'; };
-      _micRec.onresult = (e) => {
-        const t = [...e.results].map(r => r[0].transcript).join('');
-        input.value = t;
+      if (!SR) { status.textContent = 'Speech not supported.'; return; }
+      mic = new SR();
+      mic.lang = 'en-US';
+      mic.onstart  = () => { micBtn.textContent = '🔴'; status.textContent = 'Listening…'; };
+      mic.onresult = (e) => {
+        input.value = [...e.results].map(r => r[0].transcript).join('');
         if (e.results[e.results.length - 1].isFinal) {
-          _micRec = null;
-          micBtn.textContent = '🎤';
-          status.textContent = '✓ Got it — press Go or Enter to start';
+          mic = null; micBtn.textContent = '🎤'; status.textContent = 'Press Start →';
         }
       };
-      _micRec.onerror = (e) => {
-        micBtn.textContent = '🎤';
-        status.textContent = `Mic error: ${e.error}`;
-        _micRec = null;
-      };
-      _micRec.onend = () => { if (_micRec) { _micRec = null; } micBtn.textContent = '🎤'; };
-      _micRec.start();
+      mic.onerror = (e) => { micBtn.textContent = '🎤'; mic = null; };
+      mic.onend   = () => { micBtn.textContent = '🎤'; };
+      mic.start();
     });
 
-    // Click outside → close
-    const onOutside = (e) => {
-      if (!dlg.contains(e.target)) {
-        _closeDialog();
-        document.removeEventListener('click', onOutside, true);
-      }
-    };
-    setTimeout(() => document.addEventListener('click', onOutside, true), 150);
+    setTimeout(() => {
+      const outside = (e) => {
+        if (!dlg.contains(e.target)) { dlg.remove(); document.removeEventListener('click', outside, true); }
+      };
+      document.addEventListener('click', outside, true);
+    }, 150);
   }
 
-  function _closeDialog() {
-    const dlg = document.getElementById('ophelia-ask-dialog');
-    if (dlg) dlg.remove();
-  }
+  // ── Session start ───────────────────────────────────────────────────────────
 
-  // ── Core: scan → plan → hand off to player ────────────────────────────────
-
-  async function _processRequest(request) {
+  async function _startSession(goal) {
+    _goal = goal;
+    _messages = [];
     _active = true;
-    _userRequest = request;
+    _stepCount = 0;
 
-    notify('🔍 Scanning page…', 'info');
-    const ctx = scanPage();
+    window.OpheliaAgentPanel.show({
+      goal,
+      instruction: 'Looking at your page…',
+      onSkip: _skip,
+      onStop: stop,
+      onAsk:  _userMessage
+    });
 
-    notify('🤖 Building your guide…', 'info');
-    const plan = await generatePlan(request, ctx);
+    _watchPage();
+    await _analyze('What is the first step the user should take?');
+  }
 
-    if (!plan?.steps?.length) {
-      notify(plan?.message || 'Could not plan steps for that on this page. Try rephrasing.', 'error');
-      _active = false;
+  // ── Core analysis loop ──────────────────────────────────────────────────────
+  // Called after every user action, navigation, or explicit message.
+
+  async function _analyze(trigger) {
+    if (!_active) return;
+    _waitingForAction = false;
+    _clearHighlight();
+
+    window.OpheliaAgentPanel.setStatus('Thinking…');
+
+    // 1. Take screenshot (visual context)
+    const screenshot = await _captureScreen();
+
+    // 2. Scan DOM
+    const dom   = _scanPage();
+    const elStr = _formatElements(dom.elements);
+
+    // 3. Build this turn's user message (image + text)
+    const userContent = [];
+    if (screenshot) {
+      userContent.push({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data: screenshot }
+      });
+    }
+    userContent.push({
+      type: 'text',
+      text: `Goal: "${_goal}"\nPage: ${dom.url}\nTitle: ${dom.title}\n\nInteractive elements:\n${elStr}\n\n${trigger}`
+    });
+
+    // Store text-only copy in history (strip image from older turns to save tokens)
+    _messages.push({ role: 'user', content: userContent });
+
+    // 4. Call Claude (with trimmed history)
+    const step = await _callClaude();
+
+    if (!step) {
+      window.OpheliaAgentPanel.setStatus('Could not get a response — try again.');
+      _waitingForAction = true;
       return;
     }
 
-    console.log(`✅ Assistant plan: ${plan.steps.length} step(s)`, plan.steps.map((s,i) => `${i+1}. ${s.instruction}`));
+    // Store assistant reply in history
+    _messages.push({ role: 'assistant', content: step._raw });
 
-    // Save for cross-page resume
-    chrome.storage.local.set({ [ASSIST_KEY]: { steps: plan.steps, stepIndex: 0, userRequest: request } });
+    // Trim history to MAX_HISTORY messages (keep token cost bounded)
+    if (_messages.length > MAX_HISTORY) {
+      _messages = _messages.slice(_messages.length - MAX_HISTORY);
+    }
 
-    // Hand off entirely to the player — same overlay, TTS, ✏️ correct, navigation handling
-    await window.OpheliaPlayer.playSteps(plan.steps);
+    _stepCount++;
 
-    chrome.storage.local.remove(ASSIST_KEY);
-    _active = false;
+    // 5a. Goal complete
+    if (step.done) {
+      _speak('Done! Your goal is complete.');
+      window.OpheliaAgentPanel.show({
+        goal: _goal,
+        instruction: '✅ ' + step.instruction,
+        onSkip: _skip, onStop: stop, onAsk: _userMessage
+      });
+      window.OpheliaAgentPanel.setStatus('Goal complete!');
+      setTimeout(stop, 4000);
+      return;
+    }
+
+    // 5b. Show next step
+    const el = step.element ? _findEl(step.element) : null;
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); _highlightElement(el); }
+
+    window.OpheliaAgentPanel.show({
+      goal: _goal,
+      instruction: step.instruction,
+      onSkip: _skip, onStop: stop, onAsk: _userMessage
+    });
+    window.OpheliaAgentPanel.setStatus(`Step ${_stepCount}${el ? '' : ' — element not visible yet'}`);
+    _speak(step.instruction);
+
+    _waitingForAction = true;
   }
 
-  // ── Page scanning ──────────────────────────────────────────────────────────
+  // ── Page watcher ────────────────────────────────────────────────────────────
+  // Re-analyzes after any user click or URL change.
 
-  function scanPage() {
+  function _watchPage() {
+    let lastUrl = location.href;
+    let debounceTimer = null;
+
+    const reanalyze = (trigger) => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (_active) _analyze(trigger);
+      }, 900);
+    };
+
+    const onClick = (e) => {
+      if (!_active || !_waitingForAction) return;
+      // Ignore clicks on our own panel
+      if (e.target.closest('#ophelia-agent-panel') || e.target.closest('#ophelia-ap-ask-row')) return;
+      _clearHighlight();
+      window.OpheliaAgentPanel.setStatus('Processing your action…');
+      reanalyze('User just performed an action. What is the next step toward the goal?');
+    };
+
+    const navPoll = setInterval(() => {
+      if (!_active) { clearInterval(navPoll); return; }
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        window.OpheliaAgentPanel.setStatus('Page changed — re-analyzing…');
+        reanalyze('User navigated to a new page. What is the next step toward the goal?');
+      }
+    }, 300);
+
+    document.addEventListener('click', onClick, true);
+    _cleanupFns.push(
+      () => document.removeEventListener('click', onClick, true),
+      () => clearInterval(navPoll)
+    );
+  }
+
+  // ── User sends a message from the Ask field ─────────────────────────────────
+
+  function _userMessage(text) {
+    if (!_active) return;
+    _clearHighlight();
+    // Add as a plain user text turn (no screenshot)
+    _messages.push({ role: 'user', content: text });
+    window.OpheliaAgentPanel.setStatus('Processing your message…');
+    _analyze(text);
+  }
+
+  function _skip() {
+    if (!_active) return;
+    _messages.push({ role: 'user', content: 'Skip this step and tell me the next one.' });
+    _analyze('User wants to skip this step. What should they do next?');
+  }
+
+  // ── Screenshot ──────────────────────────────────────────────────────────────
+
+  function _captureScreen() {
+    return new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({ action: 'captureTab' }, res => {
+          if (chrome.runtime.lastError) { resolve(null); return; }
+          const url = res?.dataUrl || null;
+          // Strip data URL prefix, return raw base64
+          resolve(url ? url.replace(/^data:image\/[a-z]+;base64,/, '') : null);
+        });
+      } catch (_) { resolve(null); }
+    });
+  }
+
+  // ── Page scanning ───────────────────────────────────────────────────────────
+
+  function _scanPage() {
     const SEL = [
       'button', 'a[href]', 'input', 'select', 'textarea',
       '[role="button"]', '[role="link"]', '[role="menuitem"]',
@@ -222,80 +346,95 @@ window.OpheliaAssistant = (() => {
     return { url: location.href, title: document.title, elements: elements.slice(0, 90) };
   }
 
-  // ── Gemini: generate plan ──────────────────────────────────────────────────
+  // ── Claude call (multi-turn) ────────────────────────────────────────────────
 
-  async function generatePlan(request, ctx) {
-    const elStr = _formatElements(ctx.elements);
-    const prompt =
-      `You are a browser automation assistant. Your job is to break a user goal into EVERY individual click/action needed to complete it.\n\n` +
-      `Current page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n\n` +
-      `Visible interactive elements — each is indexed with its exact JSON attributes:\n${elStr}\n\n` +
-      `User goal: "${request}"\n\n` +
-      `CRITICAL RULES:\n` +
-      `1. For elements visible in the list above: copy the COMPLETE JSON object VERBATIM into the step's "element" field. Do NOT change any value, do NOT paraphrase, do NOT use your own knowledge of the site for these. Copy character-for-character.\n` +
-      `2. For elements that will only appear AFTER a click (dropdown items, dialogs, menus not yet open): use your best knowledge of the site — these won't be in the list.\n` +
-      `3. List EVERY individual click. Do NOT collapse multiple actions into one step. open menu → pick item → change setting = 3 separate steps.\n` +
-      `4. Most tasks need 3–8 steps. A single-step plan is almost always wrong.\n` +
-      `5. Instructions must be short plain English, under 10 words.\n\n` +
-      `Example of correct multi-step output for "turn off autoplay":\n` +
-      `{"possible":true,"steps":[\n` +
-      `  {"instruction":"Click your account icon","element":{"tag":"button","aria_label":"Account","text_content":null,"role":null}},\n` +
-      `  {"instruction":"Click Settings","element":{"tag":"a","aria_label":null,"text_content":"Settings","role":"menuitem"}},\n` +
-      `  {"instruction":"Click Playback and performance","element":{"tag":"div","aria_label":null,"text_content":"Playback and performance","role":null}},\n` +
-      `  {"instruction":"Toggle off Autoplay","element":{"tag":"button","aria_label":"Autoplay is on","text_content":null,"role":"switch"}}\n` +
-      `]}\n\n` +
-      `Now produce the JSON for the user goal above. Output ONLY the JSON object, no markdown, no prose.\n` +
-      `If the goal is truly impossible on this page: {"possible":false,"message":"brief reason"}`;
-    return callClaude(prompt);
-  }
-
-  // ── Claude: re-plan remaining steps after DOM change ──────────────────────
-
-  async function replan(originalRequest, remaining, ctx) {
-    const remStr  = remaining.map((s, i) => `${i + 1}. ${s.instruction}`).join('\n');
-    const elStr   = _formatElements(ctx.elements);
-    const prompt  =
-      `The user was trying to: "${originalRequest}"\n` +
-      `Previously planned remaining steps:\n${remStr}\n\n` +
-      `The page changed. Current page:\n  URL: ${ctx.url}\n  Title: ${ctx.title}\n` +
-      `Now visible elements:\n${elStr}\n\n` +
-      `Update the remaining steps to match the current page state. ` +
-      `Keep the same goal; only adjust elements and wording as needed.\n` +
-      `Return ONLY valid JSON: {"steps":[{"instruction":"...","element":{...}}]}`;
-    const result = await callClaude(prompt);
-    return result?.steps || null;
-  }
-
-  async function callClaude(prompt) {
+  async function _callClaude() {
     try {
+      // Build messages for API — strip images from all turns except the last user turn
+      const apiMessages = _messages.map((m, i) => {
+        const isLastUser = m.role === 'user' && i === _messages.length - 1;
+        if (!isLastUser && Array.isArray(m.content)) {
+          // Replace image blocks with a short text note to save tokens
+          const textParts = m.content.filter(c => c.type === 'text');
+          const hadImage  = m.content.some(c => c.type === 'image');
+          return {
+            role: m.role,
+            content: hadImage
+              ? [{ type: 'text', text: '[screenshot from previous step]' }, ...textParts]
+              : textParts
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
+
       const res = await fetch(CLAUDE_WORKER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model:      'claude-sonnet-4-5',
-          max_tokens: 1500,
-          messages:   [{ role: 'user', content: prompt }]
+          max_tokens: 400,
+          system:
+            `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
+            `After every user action you receive a new screenshot and DOM state.\n\n` +
+            `YOUR ONLY JOB: identify the single next action the user must take to reach their goal.\n\n` +
+            `RULES:\n` +
+            `1. One action per response. Never combine multiple actions.\n` +
+            `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
+            `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
+            `4. Instructions: short, plain English, max 12 words.\n\n` +
+            `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
+            `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
+            `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`,
+          messages: apiMessages
         })
       });
+
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        console.error('❌ Claude error body:', JSON.stringify(errBody));
-        throw new Error(`Claude ${res.status}: ${errBody?.error?.message || ''}`);
+        const err = await res.json().catch(() => ({}));
+        console.error('❌ Claude error:', JSON.stringify(err));
+        return null;
       }
+
       const data = await res.json();
       const raw  = data.content?.[0]?.text || '';
-      console.log('🧠 Claude raw:', raw.substring(0, 400));
+      console.log('🧠 Claude:', raw.substring(0, 300));
+
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('No JSON object in Claude response');
-      return JSON.parse(match[0]);
+      if (!match) { console.error('No JSON in Claude response'); return null; }
+      const parsed = JSON.parse(match[0]);
+      parsed._raw = raw;
+      return parsed;
     } catch (e) {
-      console.error('❌ Assistant Claude call failed:', e);
+      console.error('❌ _callClaude failed:', e);
       return null;
     }
   }
 
+  // ── Element finder ──────────────────────────────────────────────────────────
+
+  function _findEl(d) {
+    return window.OpheliaPlayer?.findElement(d) || null;
+  }
+
+  // ── Element highlight (CSS outline — no overlay dependency) ─────────────────
+
+  function _highlightElement(el) {
+    _clearHighlight();
+    if (!el) return;
+    _highlightedEl = el;
+    el.classList.add('ophelia-agent-highlight');
+  }
+
+  function _clearHighlight() {
+    if (_highlightedEl) {
+      _highlightedEl.classList.remove('ophelia-agent-highlight');
+      _highlightedEl = null;
+    }
+  }
+
+  // ── Element format ──────────────────────────────────────────────────────────
+
   function _formatElements(elements) {
-    // Indexed JSON so Claude can copy attribute values verbatim — no paraphrasing
     return elements.map((e, i) => {
       const obj = { tag: e.tag };
       if (e.aria_label)   obj.aria_label   = e.aria_label;
@@ -306,37 +445,23 @@ window.OpheliaAssistant = (() => {
     }).join('\n');
   }
 
-  // ── Cross-page resumption ──────────────────────────────────────────────────
-  // When a navigation happens mid-session, player.js pre-saves PLAY_KEY and resumes.
-  // ASSIST_KEY is a secondary backup; if player didn't pre-save, we re-plan here.
+  // ── TTS ─────────────────────────────────────────────────────────────────────
 
-  function _checkForPending() {
-    chrome.storage.local.get([ASSIST_KEY], async result => {
-      const p = result[ASSIST_KEY];
-      if (!p?.steps?.length) return;
-      // Player already handles PLAY_KEY resume; only act if player has nothing
-      chrome.storage.local.get(['opheliaTutorial'], r2 => {
-        if (r2.opheliaTutorial?.steps?.length) return; // player will handle it
-        console.log('🔄 Assistant resume (fallback)');
-        chrome.storage.local.remove(ASSIST_KEY);
-        _active = true;
-        _userRequest = p.userRequest || '';
-        window.OpheliaPlayer.playSteps(p.steps.slice(p.stepIndex));
-      });
-    });
-  }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
-  function notify(msg, type) {
-    if (typeof window.OpheliaNotify === 'function') window.OpheliaNotify(msg, type);
-    else console.log(`[Assistant][${type}] ${msg}`);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _checkForPending);
-  } else {
-    _checkForPending();
+  function _speak(text) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.05; utt.pitch = 1.0; utt.volume = 1.0;
+    const go = () => {
+      const v    = window.speechSynthesis.getVoices();
+      const pref = v.find(x => x.lang.startsWith('en') &&
+                     (x.name.includes('Google') || x.name.includes('Samantha') || x.name.includes('Natural')))
+                || v.find(x => x.lang.startsWith('en'));
+      if (pref) utt.voice = pref;
+      window.speechSynthesis.speak(utt);
+    };
+    window.speechSynthesis.getVoices().length ? go()
+      : (window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.onvoiceschanged = null; go(); });
   }
 
   return { activate, stop, isActive };
