@@ -1183,49 +1183,96 @@ Example output format:
     }
   }
   
-  // Find element by label, tag, and position (instead of injected ID)
+  // Find element by attributes using 4-tier semantic fallback strategy
   async function findElementByAttributes(elementData) {
-    console.log('🔍 Finding element by attributes:', elementData);
+    console.log('🔍 Tier 1: Checking for exact ID (non-injected)...');
     
-    let element = null;
-    
-    // Try to find by label/text content first
-    if (elementData.label) {
-      const elements = document.querySelectorAll('*');
-      for (const el of elements) {
-        // Skip HTML and BODY elements
-        if (el.tagName === 'HTML' || el.tagName === 'BODY') {
-          continue;
-        }
-        
-        if (el.textContent && el.textContent.includes(elementData.label)) {
-          // Check if tag matches if provided
-          if (elementData.tag && el.tagName.toLowerCase() !== elementData.tag.toLowerCase()) {
-            continue;
-          }
-          
-          element = el;
-          console.log('✅ Found element by label:', elementData.label, el.tagName);
-          break;
-        }
+    // Tier 1: Exact ID (Fastest) - only if not injected
+    if (elementData.id && !elementData.id.startsWith('injected_')) {
+      const element = document.getElementById(elementData.id);
+      if (element) {
+        console.log('✅ Tier 1 SUCCESS: Found element by exact ID:', elementData.id);
+        return element;
       }
+      console.log('⏭️ Tier 1 FAILED: Element not found by ID');
+    } else {
+      console.log('⏭️ Tier 1 SKIPPED: No valid ID or injected ID detected');
     }
     
-    // If not found by label, try by tag and position
-    if (!element && elementData.tag && elementData.position) {
+    console.log('🔍 Tier 2: Checking ARIA and Test IDs...');
+    
+    // Tier 2: ARIA and Test IDs (Crucial for React/Icons)
+    if (elementData.label) {
+      // Exact match for aria-label or data-testid
+      const exactMatch = document.querySelector(`[aria-label="${elementData.label}" i], [data-testid="${elementData.label}" i]`);
+      if (exactMatch) {
+        console.log('✅ Tier 2 SUCCESS: Found element by exact ARIA/test ID match:', elementData.label);
+        return exactMatch;
+      }
+      
+      // Partial match for aria-label or data-testid
+      const partialMatch = Array.from(document.querySelectorAll('[aria-label], [data-testid]')).find(el => {
+        const ariaLabel = el.getAttribute('aria-label');
+        const testId = el.getAttribute('data-testid');
+        return (ariaLabel && ariaLabel.toLowerCase().includes(elementData.label.toLowerCase())) ||
+               (testId && testId.toLowerCase().includes(elementData.label.toLowerCase()));
+      });
+      
+      if (partialMatch) {
+        console.log('✅ Tier 2 SUCCESS: Found element by partial ARIA/test ID match:', elementData.label);
+        return partialMatch;
+      }
+      
+      console.log('⏭️ Tier 2 FAILED: No ARIA/test ID match found');
+    } else {
+      console.log('⏭️ Tier 2 SKIPPED: No label provided');
+    }
+    
+    console.log('🔍 Tier 3: Checking XPath for interactive tags...');
+    
+    // Tier 3: Strict Text Content via XPath (Avoids Wrapper Snag)
+    if (elementData.label) {
+      const interactiveTags = ['button', 'a', 'span'];
+      for (const tag of interactiveTags) {
+        const xpath = `//${tag}[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${elementData.label.toLowerCase()}')]`;
+        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        const element = result.singleNodeValue;
+        
+        if (element) {
+          console.log('✅ Tier 3 SUCCESS: Found element by XPath text match in <' + tag + '>');
+          return element;
+        }
+      }
+      console.log('⏭️ Tier 3 FAILED: No XPath match found in interactive tags');
+    } else {
+      console.log('⏭️ Tier 3 SKIPPED: No label provided');
+    }
+    
+    console.log('🔍 Tier 4: Checking spatial/coordinate fallback...');
+    
+    // Tier 4: Spatial/Coordinate Fallback
+    if (elementData.tag && elementData.position) {
       const elements = document.getElementsByTagName(elementData.tag);
+      const targetX = elementData.position.x;
+      const targetY = elementData.position.y;
+      
       for (const el of elements) {
         const rect = el.getBoundingClientRect();
-        if (Math.abs(rect.left - elementData.position.x) < 100 && 
-            Math.abs(rect.top - elementData.position.y) < 100) {
-          element = el;
-          console.log('✅ Found element by tag and position:', elementData.tag);
-          break;
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        
+        if (Math.abs(centerX - targetX) < 50 && Math.abs(centerY - targetY) < 50) {
+          console.log('✅ Tier 4 SUCCESS: Found element by spatial match (within 50px)');
+          return el;
         }
       }
+      console.log('⏭️ Tier 4 FAILED: No spatial match found');
+    } else {
+      console.log('⏭️ Tier 4 SKIPPED: No tag or position provided');
     }
     
-    return element;
+    console.log('❌ All 4 tiers failed: Element not found');
+    return null;
   }
   
   // Position pointer (sphere) at specific coordinates
