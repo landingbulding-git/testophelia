@@ -1026,11 +1026,18 @@ Example output format:
       }
       
       const data = await response.json();
+      console.log('📊 Firebase response:', data);
       
       // Find the tutorial by session_id
       let tutorial = data.tutorial;
       
       if (!tutorial) {
+        console.error('❌ Tutorial not found in Firebase response');
+        console.error('Looking for session_id:', sessionId);
+        console.error('Available documents:', data.documents ? data.documents.length : 0);
+        if (data.documents && data.documents.length > 0) {
+          console.error('First document session_id:', data.documents[0].fields?.session_id?.stringValue);
+        }
         throw new Error('Tutorial not found');
       }
       
