@@ -1111,9 +1111,12 @@ Example output format:
   }
   
   // Interact with DOM element
-  async function interactWithElement(elementData) {
+  async function interactWithElement(stepData) {
     try {
-      console.log('🎯 Interacting with element:', elementData);
+      console.log('🎯 Interacting with element:', stepData);
+      
+      // Extract element data from step (handle different structures)
+      const elementData = stepData.dom_element || stepData;
       
       let element = null;
       
