@@ -3,7 +3,8 @@
 // Multi-turn conversation: Claude remembers what's been done and adapts to page changes.
 window.OpheliaAssistant = (() => {
   const CLAUDE_WORKER = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
-  const MAX_HISTORY   = 8; // keep last N messages to bound token cost
+  // 8 messages = 4 full turns. Images stripped from all but latest → ~$0.01-0.015/step.
+  const MAX_HISTORY   = 8;
 
   let _goal      = '';
   let _messages  = []; // multi-turn conversation history
@@ -13,15 +14,29 @@ window.OpheliaAssistant = (() => {
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
 
+  // ── Mic state ────────────────────────────────────────────────────────────────
+  let _mic              = null;  // active SpeechRecognition instance
+  let _micActive        = false; // true while recording
+  let _micFinalText     = '';    // accumulated final transcript
+  let _micCallback      = null;  // called with final text on _stopMic()
+
   // ── Public API ─────────────────────────────────────────────────────────────
 
   function activate() {
-    if (_active) { stop(); return; }
-    if (window.opheliaTutorialActive) window.OpheliaPlayer?.stop();
-    _listenForGoal();
+    // If mic is open: second press commits the recording
+    if (_micActive) { _stopMic(); return; }
+
+    if (_active) {
+      // Session running: let user correct or ask via voice
+      _listenForMessage();
+    } else {
+      if (window.opheliaTutorialActive) window.OpheliaPlayer?.stop();
+      _listenForGoal();
+    }
   }
 
   function stop() {
+    _stopMic();  // kill any open mic first
     _active = false;
     _waitingForAction = false;
     _cleanupFns.forEach(fn => fn());
@@ -34,30 +49,81 @@ window.OpheliaAssistant = (() => {
 
   function isActive() { return _active; }
 
-  // ── Voice goal capture — no dialog, just mic ────────────────────────────────
+  // ── Persistent toggle-mic ───────────────────────────────────────────────────
+  // First Ctrl+Shift+U → starts recording (continuous, shows live transcript).
+  // Second Ctrl+Shift+U → commits text and processes it.
 
-  function _listenForGoal() {
+  function _startMic(callback) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      // No speech API — tiny fallback input at bottom of screen
-      _showTextFallback();
-      return;
-    }
-    _setDotLabel('🎤 Say your goal…');
-    const mic = new SR();
-    mic.lang = 'en-US';
-    mic.onresult = (e) => {
-      const goal = [...e.results].map(r => r[0].transcript).join('').trim();
-      if (goal && e.results[e.results.length - 1].isFinal) {
-        _clearDotLabel();
-        _startSession(goal);
+    if (!SR) { _showTextFallback(callback); return; }
+
+    _micCallback  = callback;
+    _micFinalText = '';
+    _micActive    = true;
+    _setDotLabel('🔴 Listening…  (press Ctrl+Shift+U to send)');
+
+    _mic = new SR();
+    _mic.lang            = 'en-US';
+    _mic.continuous      = true;   // keep open until _stopMic()
+    _mic.interimResults  = true;
+
+    _mic.onresult = (e) => {
+      // Accumulate final segments; show live interim text in label
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          _micFinalText += e.results[i][0].transcript + ' ';
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+      const preview = (_micFinalText + interim).trim().slice(-60);
+      _setDotLabel(`🔴 ${preview || 'Listening…'}`);
+    };
+
+    _mic.onerror = (err) => {
+      if (err.error === 'not-allowed') { _micActive = false; _mic = null; _clearDotLabel(); }
+      // other errors (network, aborted): ignore — onend will restart if still active
+    };
+
+    // Chrome kills continuous sessions after ~60 s of silence → restart transparently
+    _mic.onend = () => {
+      if (_micActive && _mic) {
+        try { _mic.start(); } catch (_) {}
       }
     };
-    mic.onerror = () => { _clearDotLabel(); };
-    mic.start();
+
+    _mic.start();
   }
 
-  function _showTextFallback() {
+  function _stopMic() {
+    if (!_micActive) return;
+    _micActive = false;
+    if (_mic) {
+      _mic.onend = null; // prevent restart loop
+      try { _mic.stop(); } catch (_) {}
+      _mic = null;
+    }
+    _clearDotLabel();
+    const text = _micFinalText.trim();
+    _micFinalText = '';
+    const cb = _micCallback;
+    _micCallback = null;
+    if (text && cb) cb(text);
+  }
+
+  // ── Goal / message listeners ────────────────────────────────────────────────
+
+  function _listenForGoal() {
+    _startMic((goal) => _startSession(goal));
+  }
+
+  function _listenForMessage() {
+    _startMic((text) => _userMessage(text));
+  }
+
+  function _showTextFallback(callback) {
+    const isGoal = !_active;
     const wrap = document.createElement('div');
     wrap.id = 'ophelia-fallback';
     wrap.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
@@ -67,7 +133,7 @@ window.OpheliaAssistant = (() => {
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
       'box-shadow:0 8px 28px rgba(0,0,0,0.6)';
     wrap.innerHTML =
-      '<input id="ophelia-fb-input" type="text" placeholder="What do you want to accomplish?"' +
+      `<input id="ophelia-fb-input" type="text" placeholder="${isGoal ? 'What do you want to accomplish?' : 'Say something to Ophelia…'}"` +
       ' style="background:none;border:none;outline:none;color:#fff;font-size:13px;' +
       'font-family:inherit;width:300px"/>' +
       '<button id="ophelia-fb-go" style="background:#ff7a1a;border:none;border-radius:7px;' +
@@ -77,10 +143,10 @@ window.OpheliaAssistant = (() => {
     const inp = wrap.querySelector('#ophelia-fb-input');
     inp.focus();
     const go = () => {
-      const goal = inp.value.trim();
-      if (!goal) return;
+      const text = inp.value.trim();
+      if (!text) return;
       wrap.remove();
-      _startSession(goal);
+      if (callback) callback(text);
     };
     wrap.querySelector('#ophelia-fb-go').addEventListener('click', go);
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') wrap.remove(); });
