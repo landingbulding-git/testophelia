@@ -1218,12 +1218,8 @@ Example output format:
       sphere = createSphere();
     }
     
-    // Disable mouse following
-    isFollowing = false;
-    if (followTimeout) {
-      clearTimeout(followTimeout);
-      followTimeout = null;
-    }
+    // Disable mouse following by setting global flag
+    window.isSphereFollowing = false;
     
     // Position sphere at coordinates
     sphere.style.left = `${position.x}px`;
@@ -1234,10 +1230,6 @@ Example output format:
     // Make sphere visible and pulse to draw attention
     sphere.style.opacity = '1';
     sphere.style.animation = 'pulse 1s ease-in-out infinite';
-    
-    // Remove any mouse event listeners that could cause following
-    sphere.removeEventListener('mouseenter', sphere.onmouseenter);
-    sphere.onmouseenter = null;
     
     console.log('✅ Pointer positioned (mouse following disabled)');
   }
