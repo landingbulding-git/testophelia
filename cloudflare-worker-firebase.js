@@ -124,9 +124,27 @@ async function loadTutorial(request, apiKey, projectId) {
       return new Response('sessionId required', { status: 400 });
     }
     
-    const firebaseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/recording_session?key=${apiKey}`;
+    // Use Firebase structured query to filter by session_id
+    const firebaseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery?key=${apiKey}`;
     
-    const response = await fetch(firebaseUrl);
+    const requestBody = {
+      structuredQuery: {
+        from: [{ collectionId: 'recording_session' }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'session_id' },
+            op: 'EQUAL',
+            value: { stringValue: sessionId }
+          }
+        }
+      }
+    };
+    
+    const response = await fetch(firebaseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
     
     if (!response.ok) {
       const error = await response.json();
@@ -141,12 +159,10 @@ async function loadTutorial(request, apiKey, projectId) {
     
     const data = await response.json();
     
-    // Find tutorial by session_id
+    // Get the first matching document
     let tutorial = null;
-    if (data.documents) {
-      tutorial = data.documents.find(doc => 
-        doc.fields.session_id.stringValue === sessionId
-      );
+    if (data && data.length > 0 && data[0].document) {
+      tutorial = data[0].document;
     }
     
     return new Response(JSON.stringify({ tutorial }), {
