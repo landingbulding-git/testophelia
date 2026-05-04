@@ -274,16 +274,19 @@ window.OpheliaAssistant = (() => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model:      'claude-3-5-sonnet-20241022',
+          model:      'claude-sonnet-4-5',
           max_tokens: 1500,
           messages:   [{ role: 'user', content: prompt }]
         })
       });
-      if (!res.ok) throw new Error(`Claude ${res.status}`);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        console.error('❌ Claude error body:', JSON.stringify(errBody));
+        throw new Error(`Claude ${res.status}: ${errBody?.error?.message || ''}`);
+      }
       const data = await res.json();
       const raw  = data.content?.[0]?.text || '';
-      console.log('� Claude raw:', raw.substring(0, 400));
-      // Extract the JSON object — ignores any surrounding prose
+      console.log('🧠 Claude raw:', raw.substring(0, 400));
       const match = raw.match(/\{[\s\S]*\}/);
       if (!match) throw new Error('No JSON object in Claude response');
       return JSON.parse(match[0]);

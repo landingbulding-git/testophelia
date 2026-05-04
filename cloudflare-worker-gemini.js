@@ -33,7 +33,7 @@ async function handleClaude(request, env) {
   const body = await request.json();
 
   const claudeBody = {
-    model:      body.model      || 'claude-3-5-sonnet-20241022',
+    model:      body.model      || 'claude-sonnet-4-5',
     max_tokens: body.max_tokens || 1500,
     messages:   body.messages
   };
