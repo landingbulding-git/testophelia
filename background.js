@@ -1,80 +1,54 @@
-// Background service worker for keyboard shortcut handling
+// Ophelia Background Service Worker
 
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
 chrome.commands.onCommand.addListener((command) => {
-  console.log('🎹 Keyboard command received:', command);
-  if (command === 'toggle-sphere') {
-    console.log('🎯 Toggle sphere command triggered');
-    
-    // Get active tab and send message to toggle sphere
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { action: 'toggleSphere' })
-          .then(() => console.log('✅ Toggle message sent'))
-          .catch(err => console.error('❌ Failed to send toggle message:', err));
-      }
-    });
-  } else if (command === 'send-firebase') {
-    console.log('🎯 Firebase send command triggered');
-    
-    // Get active tab and send message to send data to Firebase
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        // Try sending message directly first (scripts already loaded via manifest)
-        chrome.tabs.sendMessage(tabs[0].id, { action: 'sendFirebase' })
-          .then(() => console.log('✅ Firebase send message sent'))
-          .catch(err => {
-            console.log('⚠️ Content script not ready, injecting...');
-            // Inject scripts if message fails
-            chrome.scripting.executeScript({
-              target: { tabId: tabs[0].id },
-              files: ['gemini-config.js', 'agent-prompt.js', 'gemini-tutor.js', 'content.js']
-            }).then(() => {
-              // Content script injected, now send message
-              setTimeout(() => {
-                chrome.tabs.sendMessage(tabs[0].id, { action: 'sendFirebase' })
-                  .then(() => console.log('✅ Firebase send message sent'))
-                  .catch(err => console.error('❌ Failed to send Firebase message:', err));
-              }, 500); // Wait for scripts to initialize
-            }).catch(err => console.error('❌ Failed to inject scripts:', err));
-          });
-      }
-    });
-  }
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]) return;
+    const tabId = tabs[0].id;
+
+    if (command === 'toggle-sphere') {
+      chrome.tabs.sendMessage(tabId, { action: 'toggleSphere' }).catch(() => {});
+    } else if (command === 'send-firebase') {
+      // Ctrl+Shift+F now toggles recording
+      chrome.tabs.sendMessage(tabId, { action: 'toggleRecording' }).catch(() => {});
+    }
+  });
 });
 
-// Listen for messages from content scripts
+// ── Messages from content scripts ─────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'navigate') {
-    console.log('🎯 Navigate command triggered:', request.url);
-    
-    // Get active tab and navigate to URL
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.tabs.update(tabs[0].id, { url: request.url })
-          .then(() => console.log('✅ Navigation successful'))
-          .catch(err => console.error('❌ Navigation failed:', err));
-      }
-    });
+    // Navigate the sender's tab to the requested URL
+    const tabId = sender.tab?.id;
+    if (tabId) {
+      chrome.tabs.update(tabId, { url: request.url })
+        .then(() => sendResponse({ success: true }))
+        .catch(err => sendResponse({ success: false, error: err.message }));
+    }
+    return true;
   }
 });
 
-// Listen for tutorial URL clicks
+// ── Tutorial URL detection ─────────────────────────────────────────────────────
+// When the user opens a tutorial share link, tell the content script to load it.
 chrome.webNavigation.onCompleted.addListener((details) => {
-  if (details.frameId === 0) { // Main frame only
-    const url = new URL(details.url);
-    
-    // Check if this is a tutorial URL
-    if (url.hostname === 'testophelia.vercel.app' && url.pathname === '/tutorial.html') {
-      const sessionId = url.searchParams.get('id');
-      if (sessionId) {
-        console.log('🎯 Tutorial URL detected:', sessionId);
-        
-        // Send message to content script to load tutorial
-        chrome.tabs.sendMessage(details.tabId, {
-          action: 'loadTutorial',
-          sessionId: sessionId
-        }).catch(err => console.log('Tab not ready for tutorial load'));
-      }
+  if (details.frameId !== 0) return; // Main frame only
+
+  const url = new URL(details.url);
+  if (url.hostname === 'testophelia.vercel.app' && url.pathname === '/tutorial.html') {
+    const sessionId = url.searchParams.get('id');
+    if (sessionId) {
+      console.log('🎯 Tutorial URL detected, loading session:', sessionId);
+      chrome.tabs.sendMessage(details.tabId, {
+        action: 'loadTutorial',
+        sessionId
+      }).catch(() => {
+        // Content script may not be ready yet — retry once after a short delay
+        setTimeout(() => {
+          chrome.tabs.sendMessage(details.tabId, { action: 'loadTutorial', sessionId }).catch(() => {});
+        }, 1000);
+      });
     }
   }
 });
+

@@ -1,73 +1,204 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cross-Tab Utility</title>
-    <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ophelia</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #111;
+      color: #f0f0f0;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid #222;
+    }
+    .logo {
+      width: 16px; height: 16px;
+      background: #ff7a1a;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #ff7a1a;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .header .subtitle {
+      font-size: 11px;
+      color: #888;
+      margin-left: auto;
+    }
+
+    /* ── Recording section ────────────────────────────────────── */
+    .section {
+      padding: 16px 18px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #666;
+      margin-bottom: 12px;
+    }
+
+    .rec-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      min-height: 20px;
+    }
+    .rec-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #444;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .rec-dot.active {
+      background: #ff3333;
+      animation: blink 1s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .rec-text {
+      font-size: 12px;
+      color: #aaa;
+    }
+    .rec-text strong { color: #fff; }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+
+    .btn-record {
+      background: #ff7a1a;
+      color: #fff;
+    }
+    .btn-record:hover { opacity: 0.9; }
+    .btn-stop {
+      background: #333;
+      color: #ff4444;
+      border: 1.5px solid #ff4444;
+    }
+    .btn-stop:hover { background: #3a1010; }
+
+    /* ── Tutorial link section ──────────────────────────────────── */
+    .link-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .link-label {
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .link-url {
+      font-size: 11px;
+      color: #ff7a1a;
+      word-break: break-all;
+      line-height: 1.4;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .link-copy {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 11px;
+      color: #888;
+      cursor: pointer;
+      background: #222;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 3px 8px;
+    }
+    .link-copy:hover { color: #fff; }
+
+    /* ── Info row ───────────────────────────────────────────────── */
+    .info-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 12px 18px;
+      font-size: 11px;
+      color: #555;
+    }
+    .shortcut {
+      background: #1e1e1e;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: monospace;
+      font-size: 10px;
+      color: #888;
+    }
+    .hidden { display: none !important; }
+  </style>
 </head>
 <body>
-    <div class="popup-container">
-        <header class="popup-header">
-            <h1>Cross-Tab Utility</h1>
-            <div class="status-indicator" id="statusIndicator">
-                <span class="status-dot"></span>
-                <span class="status-text">Active</span>
-            </div>
-        </header>
-        
-        <main class="popup-content">
-            <section class="stats-section">
-                <div class="stat-item">
-                    <span class="stat-value" id="activeTabCount">0</span>
-                    <span class="stat-label">Active Tabs</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value" id="totalClicks">0</span>
-                    <span class="stat-label">Total Clicks</span>
-                </div>
-            </section>
-            
-            <section class="controls-section">
-                <div class="control-item">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="enableExtension" checked>
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-text">Enable Extension</span>
-                    </label>
-                </div>
-                
-                <div class="control-item">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="showSphere" checked>
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-text">Show Sphere</span>
-                    </label>
-                </div>
-                
-                <div class="control-item">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="enablePulse" checked>
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-text">Pulse Animation</span>
-                    </label>
-                </div>
-            </section>
-            
-            <section class="tabs-section">
-                <h3>Active Tabs</h3>
-                <div class="tabs-list" id="tabsList">
-                    <div class="no-tabs">No active tabs</div>
-                </div>
-            </section>
-        </main>
-        
-        <footer class="popup-footer">
-            <button id="clearData" class="btn btn-secondary">Clear Data</button>
-            <button id="openOptions" class="btn btn-primary">Options</button>
-        </footer>
+  <div class="header">
+    <div class="logo"></div>
+    <h1>Ophelia</h1>
+    <span class="subtitle" id="stepCount"></span>
+  </div>
+
+  <!-- Recording -->
+  <div class="section">
+    <div class="section-label">Tutorial Recorder</div>
+    <div class="rec-status">
+      <div class="rec-dot" id="recDot"></div>
+      <span class="rec-text" id="recText">Not recording</span>
     </div>
-    
-    <script src="popup.js"></script>
+    <button class="btn btn-record" id="btnStart">⏺ Start Recording</button>
+    <button class="btn btn-stop hidden" id="btnStop">⏹ Stop &amp; Save Tutorial</button>
+  </div>
+
+  <!-- Last tutorial link -->
+  <div class="section hidden" id="linkSection">
+    <div class="section-label">Last Tutorial</div>
+    <div class="link-box">
+      <div class="link-label">Share this link:</div>
+      <div class="link-url" id="linkUrl"></div>
+      <button class="link-copy" id="btnCopy">Copy link</button>
+    </div>
+  </div>
+
+  <!-- Keyboard hint -->
+  <div class="info-row">
+    <kbd class="shortcut">Ctrl+Shift+F</kbd>
+    <span>toggles recording &nbsp;·&nbsp;</span>
+    <kbd class="shortcut">Ctrl+Shift+U</kbd>
+    <span>toggles sphere</span>
+  </div>
+
+  <script src="popup.js"></script>
 </body>
 </html>

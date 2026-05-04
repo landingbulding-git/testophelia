@@ -2,7 +2,11 @@
   "manifest_version": 3,
   "name": "Cross-Tab Utility",
   "version": "1.0.0",
-  "description": "A Chrome Extension that injects a persistent, interactive orange sphere into every browser tab",
+  "description": "Ophelia — Record and share guided web tutorials with voice narration",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Ophelia"
+  },
   "permissions": [
     "activeTab",
     "storage",
@@ -19,7 +23,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "content.js"],
+      "js": ["gemini-config.js", "agent-prompt.js", "gemini-tutor.js", "overlay.js", "recorder.js", "player.js", "content.js"],
       "run_at": "document_end"
     }
   ],
@@ -36,7 +40,7 @@
         "default": "Ctrl+Shift+F",
         "mac": "MacCtrl+Shift+F"
       },
-      "description": "Send static data to Firebase"
+      "description": "Start / Stop recording a tutorial"
     }
   }
 }

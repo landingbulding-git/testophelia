@@ -1,1716 +1,323 @@
+// Ophelia Content Script - Coordinator
+// Recording logic → recorder.js | Playback logic → player.js | Overlay UI → overlay.js
 (() => {
-  // Audio functionality
-  let audioContext = null;
-  let microphoneStream = null;
-  
-  // Speech-to-Text functionality
-  let recognition = null;
-  let sttResults = [];
-  let isSTTActive = false;
-  let isListeningMode = false;
-  let lastSTTActivity = Date.now();
-  
-  // Status manager for different states
-  let currentStatus = 'background'; // background, listening, thinking, speaking
-  
-  // Gemini Tutor functionality
+  // ── STT state ────────────────────────────────────────────────────────────
+  let recognition  = null;
+  let sttActive    = false;
+  let isListening  = false;
+
+  // ── Gemini tutor state ───────────────────────────────────────────────────
   let geminiConfig = null;
-  let geminiTutor = null;
-  let isTutorEnabled = false;
-  
-  // Text-to-Speech functionality
-  let speechSynthesis = window.speechSynthesis;
-  let isTTSEnabled = true;
-  let isTTSSpeaking = false;
-  
-  // DOM scan result storage (temporary, single result)
-  let domScanResult = null;
-  let lastScannedURL = null;
-  let initialDOMElements = []; // Initial page elements
-  let injectedDOMElements = []; // New injected elements
-  
-  // Firebase configuration
-  let firebaseInitialized = true; // REST API doesn't need initialization
-  
-  // Cloudflare Worker URL for Firebase operations
-  const firebaseWorkerUrl = 'https://ophelia-firebase-worker.norbertb-consulting.workers.dev'; // Replace with your actual worker URL
-  
-  const firebaseConfig = {
-    projectId: "ophelia-bd2e0", // Your Firebase project ID
-    authDomain: "ophelia-bd2e0.firebaseapp.com" // Your Firebase auth domain
+  let geminiTutor  = null;
+  let tutorEnabled = false;
+
+  // ── Notification system (exposed globally for recorder.js and player.js) ──
+
+  window.OpheliaNotify = function(message, type = 'info') {
+    document.querySelectorAll('.ophelia-notification').forEach(n => n.remove());
+
+    const colors = {
+      info:    '#1a73e8',
+      success: '#34a853',
+      error:   '#ea4335',
+      warning: '#fbbc04'
+    };
+    const el = document.createElement('div');
+    el.className = 'ophelia-notification';
+    Object.assign(el.style, {
+      position:     'fixed',
+      top:          '16px',
+      right:        '16px',
+      background:   '#1a1a1a',
+      border:       `1.5px solid ${colors[type] || colors.info}`,
+      borderRadius: '10px',
+      color:        '#fff',
+      fontFamily:   '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize:     '13px',
+      lineHeight:   '1.5',
+      padding:      '10px 16px',
+      zIndex:       '2147483644',
+      maxWidth:     '360px',
+      boxShadow:    '0 4px 20px rgba(0,0,0,0.4)',
+      opacity:      '0',
+      transition:   'opacity 0.25s ease',
+      pointerEvents:'none',
+      whiteSpace:   'pre-wrap'
+    });
+    el.textContent = message;
+    document.body.appendChild(el);
+
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+
+    // Keep success messages with URLs visible longer
+    const duration = (type === 'success' && message.includes('http')) ? 10000 : 4000;
+    setTimeout(() => {
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 300);
+    }, duration);
   };
-  
-  // Session tracking variables
-  let sessionActive = false;
-  let sessionSteps = [];
-  let sessionStartTime = null;
-  let clickListener = null;
-  let navigationListener = null;
-  
-  // Tutorial mode flag - disables mouse following
-  let tutorialModeActive = false;
-  
-  // Wait for DOM to be ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeSphere);
-  } else {
-    initializeSphere();
-  }
-  
-  // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'toggleSphere') {
-      handleSphereClick();
-      sendResponse({ success: true });
-    } else if (message.action === 'sendFirebase') {
-      toggleSessionTracking();
-      sendResponse({ success: true });
-    } else if (message.action === 'loadTutorial') {
-      // Load tutorial from Firebase
-      loadTutorialFromFirebase(message.sessionId);
-      sendResponse({ success: true });
+
+  // ── Message routing from background.js and popup ─────────────────────────
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    switch (msg.action) {
+      case 'toggleSphere':
+        handleSphereClick();
+        sendResponse({ success: true });
+        break;
+
+      case 'toggleRecording':
+        if (window.OpheliaRecorder.isActive()) {
+          stopSTT();
+          window.OpheliaRecorder.stop();
+        } else {
+          window.OpheliaRecorder.start();
+          startSTT(); // Mic on for speech → attached to each step
+        }
+        sendResponse({ success: true });
+        break;
+
+      case 'loadTutorial':
+        window.OpheliaPlayer.loadAndStart(msg.sessionId);
+        sendResponse({ success: true });
+        break;
+
+      case 'getRecordingState':
+        sendResponse({
+          active:    window.OpheliaRecorder.isActive(),
+          stepCount: window.OpheliaRecorder.stepCount()
+        });
+        break;
     }
     return true;
   });
-  
-  function initializeSphere() {
-    // Check if sphere already exists
-    if (document.getElementById('cross-tab-sphere')) {
-      return;
-    }
 
-    // Create sphere element
+  // ── Init ──────────────────────────────────────────────────────────────────
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  function init() {
+    if (document.getElementById('cross-tab-sphere')) return;
+    createSphere();
+    initGeminiTutor();
+  }
+
+  // ── Sphere ────────────────────────────────────────────────────────────────
+
+  function createSphere() {
     const sphere = document.createElement('div');
     sphere.id = 'cross-tab-sphere';
-    sphere.className = 'cross-tab-sphere';
-    
-    // Position and style (12% smaller: 20px -> 17.6px, rounded to 18px)
-    sphere.style.position = 'fixed';
-    sphere.style.width = '18px';
-    sphere.style.height = '18px';
-    sphere.style.backgroundColor = '#ff7a1a';
-    sphere.style.borderRadius = '50%';
-    sphere.style.bottom = '20px';
-    sphere.style.right = '20px';
-    sphere.style.cursor = 'pointer';
-    sphere.style.zIndex = '10000';
-    sphere.style.opacity = '0.8';
-    sphere.style.transition = 'transform 0.1s ease-out, opacity 0.3s ease';
-    sphere.style.boxShadow = '0 0 18px #ff7a1a';
-    sphere.style.pointerEvents = 'auto';
-    
-    // Inject ophelia tutorial pulse styles
-    if (!document.getElementById('ophelia-styles')) {
-      const style = document.createElement('style');
-      style.id = 'ophelia-styles';
-      style.textContent = `
-        @keyframes ophelia-target-pulse {
-          0%, 100% { outline-color: #ff7a1a; outline-offset: 2px; }
-          50% { outline-color: #ff4500; outline-offset: 6px; }
-        }
-        .ophelia-target {
-          outline: 3px solid #ff7a1a !important;
-          outline-offset: 2px !important;
-          animation: ophelia-target-pulse 1s ease-in-out infinite !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-    
-    // Add click handler
+    Object.assign(sphere.style, {
+      position:     'fixed',
+      width:        '18px',
+      height:       '18px',
+      background:   '#ff7a1a',
+      borderRadius: '50%',
+      bottom:       '20px',
+      right:        '20px',
+      cursor:       'pointer',
+      zIndex:       '2147483645',
+      opacity:      '0.85',
+      boxShadow:    '0 0 16px #ff7a1a',
+      transition:   'transform 0.1s ease-out, box-shadow 0.3s ease',
+      pointerEvents:'auto'
+    });
+    sphere.title = 'Ophelia — click to talk, Ctrl+Shift+F to record';
     sphere.addEventListener('click', handleSphereClick);
-    
-    // Add intelligent mouse following
-    setupMouseFollowing(sphere);
-    
-    // Inject into page
     document.body.appendChild(sphere);
-    
-    // Initialize Gemini Tutor
-    initializeGeminiTutor();
-    
-    // Firebase REST API doesn't need initialization
-    
-    // Start URL change detection
-    startURLChangeDetection();
-    
-    // Start MutationObserver for DOM changes
-    startMutationObserver();
-    
-    // Check for existing session on load
-    checkForExistingSession();
-    
-    // Check for pending tutorial on load
-    checkForPendingTutorial();
+    setupMouseFollowing(sphere);
   }
-  
+
   function handleSphereClick() {
-    const sphere = document.getElementById('cross-tab-sphere');
-    if (!sphere) return;
-    
-    // Toggle expansion or trigger action
-    sphere.classList.toggle('sphere-expanded');
-    
-    // Check if currently speaking - stop TTS immediately
-    if (currentStatus === 'speaking' && isTTSSpeaking) {
-      console.log('🛑 Stopping TTS - shortcut pressed during speaking');
-      speechSynthesis.cancel();
-      isTTSSpeaking = false;
-      currentStatus = 'background';
-      showSTTNotification('Speaking stopped', 'info');
+    // During recording, sphere click = stop recording
+    if (window.OpheliaRecorder.isActive()) {
+      stopSTT();
+      window.OpheliaRecorder.stop();
       return;
     }
-    
-    // Normal toggle logic
-    if (isListeningMode) {
-      // Currently listening - stop
-      stopSTTSession();
+    // Otherwise toggle conversational STT (Gemini tutor)
+    if (isListening) {
+      stopSTT();
     } else {
-      // Not listening - start
-      startSTTSession();
+      startSTT();
     }
   }
-  
-  // Start URL change detection
-  function startURLChangeDetection() {
-    console.log('🔍 Starting URL change detection...');
-    
-    // Initial scan on page load
-    performDOMScan();
-    
-    // Listen for URL changes (for SPA navigation)
-    let lastURL = window.location.href;
-    
-    // Method 1: Listen for popstate (back/forward navigation)
-    window.addEventListener('popstate', () => {
-      if (window.location.href !== lastURL) {
-        console.log('🔄 URL changed (popstate):', window.location.href);
-        lastURL = window.location.href;
-        performDOMScan();
+
+  function setupMouseFollowing(sphere) {
+    let mx = window.innerWidth - 40, my = window.innerHeight - 40;
+    let sx = mx, sy = my;
+    let following   = false;
+    let followTimer = null;
+
+    document.addEventListener('mousemove', (e) => {
+      mx = e.clientX;
+      my = e.clientY;
+
+      if (!following) {
+        following = true;
+        sphere.style.bottom = 'auto';
+        sphere.style.right  = 'auto';
       }
+
+      clearTimeout(followTimer);
+      followTimer = setTimeout(() => {
+        following = false;
+        Object.assign(sphere.style, {
+          bottom: '20px', right: '20px', left: 'auto', top: 'auto'
+        });
+      }, 2000);
     });
-    
-    // Method 2: Monitor URL changes with setInterval (for SPA navigation)
-    setInterval(() => {
-      if (window.location.href !== lastURL) {
-        console.log('🔄 URL changed (polling):', window.location.href);
-        lastURL = window.location.href;
-        performDOMScan();
+
+    (function animate() {
+      // Disable mouse-following while a tutorial is playing
+      if (!window.opheliaTutorialActive && following) {
+        sx += (mx + 30 - sx) * 0.1;
+        sy += (my + 30 - sy) * 0.1;
+        sphere.style.left = `${sx}px`;
+        sphere.style.top  = `${sy}px`;
       }
-    }, 1000); // Check every second
+      requestAnimationFrame(animate);
+    })();
   }
-  
-  // Perform DOM scan and store result
-  function performDOMScan() {
-    const currentURL = window.location.href;
-    
-    // Only scan if URL has changed
-    if (currentURL === lastScannedURL) {
-      console.log('⏭️ Skipping scan - URL unchanged');
-      return;
-    }
-    
-    console.log('🔍 Performing DOM scan for:', currentURL);
-    const result = scanDOM();
-    
-    // Store result (overwrites previous)
-    domScanResult = result;
-    lastScannedURL = currentURL;
-    
-    // Store initial elements separately
-    initialDOMElements = result.elements;
-    injectedDOMElements = []; // Reset injected elements on URL change
-    
-    console.log('💾 DOM scan result stored for:', currentURL);
-    console.log('📊 Initial elements:', initialDOMElements.length);
-  }
-  
-  // Start MutationObserver for DOM changes
-  function startMutationObserver() {
-    console.log('🔬 Starting MutationObserver...');
-    
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeType === Node.ELEMENT_NODE) {
-              // Check if this is an interactive element
-              const interactiveElement = checkInteractiveElement(node);
-              if (interactiveElement) {
-                console.log('🆕 New interactive element detected:', interactiveElement.label);
-                injectedDOMElements.push(interactiveElement);
-                updateDOMResult();
-              }
-              
-              // Also check children of the added node
-              const interactiveChildren = findInteractiveElements(node);
-              interactiveChildren.forEach((child) => {
-                if (!isElementAlreadyStored(child.id)) {
-                  console.log('🆕 New interactive child element detected:', child.label);
-                  injectedDOMElements.push(child);
-                  updateDOMResult();
-                }
-              });
-            }
-          });
-        }
-      });
-    });
-    
-    // Start observing the document body
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-    
-    console.log('✅ MutationObserver started');
-  }
-  
-  // Check if element is interactive
-  function checkInteractiveElement(element) {
-    const interactiveSelectors = [
-      'button', 'a[href]', 'input', 'select', 'textarea',
-      '[onclick]', '[onmousedown]', '[onmouseup]',
-      '[role="button"]', '[role="link"]', '[role="menuitem"]',
-      '[role="tab"]', '[role="option"]', '[role="checkbox"]',
-      '[role="radio"]', '[aria-label]', '[aria-describedby]',
-      '[data-testid]', '[data-action]', '[data-click]'
-    ];
-    
-    for (const selector of interactiveSelectors) {
-      if (element.matches(selector)) {
-        return extractElementInfo(element);
+
+  // ── STT — dual purpose: feeds recorder buffer AND conversational AI ───────
+
+  function startSTT() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { window.OpheliaNotify('Speech recognition not supported', 'error'); return; }
+    if (sttActive) return;
+
+    recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = 'en-US';
+
+    recognition.onstart = () => {
+      sttActive = isListening = true;
+      const sphere = document.getElementById('cross-tab-sphere');
+      if (sphere) sphere.style.boxShadow = '0 0 18px #ff0000';
+      if (!window.OpheliaRecorder.isActive()) {
+        window.OpheliaNotify('Listening…', 'info');
       }
-    }
-    return null;
-  }
-  
-  // Find all interactive elements within a node
-  function findInteractiveElements(node) {
-    const interactiveSelectors = [
-      'button', 'a[href]', 'input', 'select', 'textarea',
-      '[onclick]', '[onmousedown]', '[onmouseup]',
-      '[role="button"]', '[role="link"]', '[role="menuitem"]',
-      '[role="tab"]', '[role="option"]', '[role="checkbox"]',
-      '[role="radio"]', '[aria-label]', '[aria-describedby]',
-      '[data-testid]', '[data-action]', '[data-click]'
-    ];
-    
-    const elements = [];
-    const foundElements = node.querySelectorAll(interactiveSelectors.join(', '));
-    
-    foundElements.forEach((element) => {
-      const elementInfo = extractElementInfo(element);
-      if (elementInfo) {
-        elements.push(elementInfo);
+    };
+
+    recognition.onresult = (e) => {
+      let final = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
       }
-    });
-    
-    return elements;
-  }
-  
-  // Generate a unique, stable CSS selector path for an element
-  function generateSelectorPath(element) {
-    const path = [];
-    let current = element;
-    while (current && current !== document.body) {
-      let selector = current.tagName.toLowerCase();
-      // Prefer stable anchors: id or data-testid break the chain
-      if (current.id && !current.id.startsWith('injected_')) {
-        selector += `#${CSS.escape(current.id)}`;
-        path.unshift(selector);
-        break;
+      if (!final.trim()) return;
+
+      final = final.trim();
+      console.log('🗣️', final);
+
+      // Always push to recorder buffer (no-op if not recording)
+      window.OpheliaRecorder.pushSpeech(final);
+
+      // Only send to Gemini tutor when NOT recording
+      if (!window.OpheliaRecorder.isActive()) {
+        sendToTutor(final);
       }
-      if (current.getAttribute('data-testid')) {
-        selector += `[data-testid="${current.getAttribute('data-testid')}"]`;
-        path.unshift(selector);
-        break;
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error !== 'no-speech') console.error('STT error:', e.error);
+    };
+
+    recognition.onend = () => {
+      sttActive = isListening = false;
+      const sphere = document.getElementById('cross-tab-sphere');
+      if (sphere) sphere.style.boxShadow = '0 0 16px #ff7a1a';
+      // Auto-restart during recording so the mic never drops
+      if (window.OpheliaRecorder.isActive()) {
+        setTimeout(startSTT, 300);
       }
-      const siblings = current.parentNode
-        ? Array.from(current.parentNode.children).filter(s => s.tagName === current.tagName)
-        : [];
-      if (siblings.length > 1) {
-        selector += `:nth-of-type(${siblings.indexOf(current) + 1})`;
-      }
-      path.unshift(selector);
-      current = current.parentElement;
-    }
-    return path.join(' > ');
+    };
+
+    recognition.start();
   }
-  
-  // Extract element information
-  function extractElementInfo(element) {
-    try {
-      const rect = element.getBoundingClientRect();
-      const computedStyle = window.getComputedStyle(element);
-      
-      // Skip hidden or invisible elements
-      if (computedStyle.display === 'none' || 
-          computedStyle.visibility === 'hidden' || 
-          computedStyle.opacity === '0' ||
-          rect.width === 0 || rect.height === 0) {
-        return null;
-      }
-      
-      // Collect all stable identifiers, aria-label first (most reliable on React sites)
-      const ariaLabel = element.getAttribute('aria-label') || '';
-      const testId   = element.getAttribute('data-testid') || '';
-      const placeholder = element.getAttribute('placeholder') || '';
-      const value    = element.getAttribute('value') || '';
-      const text     = element.textContent ? element.textContent.trim().substring(0, 50) : '';
-      
-      // Build label in priority order
-      const label = ariaLabel || testId || placeholder || value || text || element.tagName.toLowerCase();
-      
-      // Calculate center coordinates
-      const centerX = Math.round(rect.left + rect.width / 2);
-      const centerY = Math.round(rect.top + rect.height / 2);
-      
-      return {
-        id: element.id && !element.id.startsWith('injected_') ? element.id : null,
-        aria_label: ariaLabel || null,
-        data_testid: testId || null,
-        selector: generateSelectorPath(element),
-        label: label,
-        tag: element.tagName.toLowerCase(),
-        pos: { x: centerX, y: centerY }
-      };
-      
-    } catch (error) {
-      console.warn('Error extracting element info:', error);
-      return null;
-    }
+
+  function stopSTT() {
+    if (recognition && sttActive) recognition.stop();
+    sttActive = isListening = false;
   }
-  
-  // Check if element is already stored
-  function isElementAlreadyStored(elementId) {
-    if (!elementId) return false;
-    return initialDOMElements.some(el => el.id === elementId) ||
-           injectedDOMElements.some(el => el.id === elementId);
-  }
-  
-  // Update DOM result with injected elements
-  function updateDOMResult() {
-    if (domScanResult) {
-      domScanResult.elements = [...initialDOMElements, ...injectedDOMElements];
-      console.log('📊 DOM result updated:', domScanResult.elements.length, 'total elements');
-    }
-  }
-  
-  // Start STT session
-  function startSTTSession() {
-    try {
-      console.log('🎤 Starting STT session...');
-      
-      // Clear previous results to ensure fresh start
-      sttResults = [];
-      
-      // Check if browser supports speech recognition
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        console.error('❌ Speech recognition not supported');
-        return;
-      }
-      
-      // Stop existing session if any
-      if (recognition && isSTTActive) {
-        recognition.stop();
-      }
-      
-      // Initialize speech recognition
-      recognition = new SpeechRecognition();
-      
-      // Configure for continuous operation
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.maxAlternatives = 1;
-      
-      // Event handlers
-      recognition.onstart = () => {
-        isSTTActive = true;
-        isListeningMode = true;
-        lastSTTActivity = Date.now();
-        console.log('🎤 STT session started - microphone activated');
-        
-        // Visual feedback - sphere to active state
-        const sphere = document.getElementById('cross-tab-sphere');
-        if (sphere) {
-          sphere.classList.add('sphere-active');
-          sphere.style.boxShadow = '0 0 18px #ff0000';
-        }
-      };
-      
-      recognition.onresult = (event) => {
-        let finalTranscript = '';
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          }
-        }
-        
-        if (finalTranscript.trim()) {
-          // Store final result
-          sttResults.push({
-            text: finalTranscript.trim(),
-            timestamp: Date.now()
-          });
-          
-          console.log('🗣️ STT Result:', finalTranscript.trim());
-          
-          // Keep only last 10 results
-          if (sttResults.length > 10) {
-            sttResults.shift();
-          }
-        }
-        
-        if (event.results[event.results.length - 1].isFinal) {
-          console.log('🔄 STT Interim:', finalTranscript);
-        }
-      };
-      
-      recognition.onerror = (event) => {
-        console.error('❌ STT Error:', event.error);
-      };
-      
-      recognition.onend = () => {
-        console.log('🎤 STT session ended - microphone deactivated');
-        isSTTActive = false;
-        
-        // Ensure microphone is stopped
-        stopMicrophone();
-      };
-      
-      // Start recognition
-      recognition.start();
-      
-    } catch (error) {
-      console.error('❌ Failed to start STT:', error);
-    }
-  }
-  
-  // Stop STT session
-  function stopSTTSession() {
-    if (recognition && isSTTActive) {
-      recognition.stop();
-      isSTTActive = false;
-      isListeningMode = false;
-      console.log('🎤 STT session stopped manually - microphone deactivated');
-      
-      // Ensure microphone is stopped
-      stopMicrophone();
-      
-      // Show captured text if any (combine all results from this session)
-      setTimeout(() => {
-        if (sttResults.length > 0) {
-          // Combine all results from this session into one message
-          const completeMessage = sttResults.map(result => result.text).join(' ').trim();
-          console.log('🗣️ Captured speech:', completeMessage);
-          
-          // Update status to thinking and send to Gemini API
-          currentStatus = 'thinking';
-          showSTTNotification('🤖 Thinking...', 'info');
-          
-          // Send to Gemini API
-          sendToTutor(completeMessage);
-          
-          // Clear results after sending
-          sttResults = [];
-        } else {
-          console.log('⚠️ No speech captured in this session');
-        }
-      }, 200);
-    }
-    
-    // Visual feedback - sphere to inactive state
-    const sphere = document.getElementById('cross-tab-sphere');
-    if (sphere) {
-      sphere.classList.remove('sphere-active');
-      sphere.style.boxShadow = '0 0 18px #ff7a1a';
-    }
-  }
-  
-  // Initialize Gemini Tutor
-  async function initializeGeminiTutor() {
+
+  // ── Gemini tutor (conversational AI — not used during recording) ──────────
+
+  async function initGeminiTutor() {
     try {
       geminiConfig = new GeminiConfig();
       await geminiConfig.initialize();
-      
       if (geminiConfig.isConfigured) {
         geminiTutor = new GeminiTutor(geminiConfig);
         await geminiTutor.initialize();
-        
-        // Load chat history from storage for cross-tab persistence
         geminiTutor.loadHistoryFromStorage();
-        
-        isTutorEnabled = true;
-        console.log('✅ Gemini Tutor enabled');
-      } else {
-        console.log('⚠️ Gemini Tutor disabled - API key not configured');
+        tutorEnabled = true;
+        console.log('✅ Gemini Tutor ready');
       }
-    } catch (error) {
-      console.error('❌ Failed to initialize Gemini Tutor:', error);
+    } catch (e) {
+      console.error('❌ Gemini Tutor init failed:', e);
     }
   }
-  
-  // Toggle session tracking
-  function toggleSessionTracking() {
-    if (!sessionActive) {
-      startSessionTracking();
-    } else {
-      endSessionTracking();
-    }
-  }
-  
-  // Start session tracking
-  function startSessionTracking() {
-    console.log('🎯 Starting session tracking...');
-    sessionActive = true;
-    sessionStartTime = Date.now();
-    sessionSteps = [];
-    startingUrl = window.location.href; // Capture starting URL
-    
-    // Save session state to storage
-    saveSessionState();
-    
-    // Add initial step
-    addSessionStep('session_start', {
-      url: window.location.href,
-      timestamp: new Date().toISOString()
-    });
-    
-    // Start click tracking
-    startClickTracking();
-    
-    // Start navigation tracking
-    startNavigationTracking();
-    
-    // Activate STT for voice input during session
-    startSTTSession();
-    
-    showSTTNotification('Session tracking started - Mic active', 'info');
-    console.log('✅ Session tracking active with STT');
-  }
-  
-  // End session tracking
-  async function endSessionTracking() {
-    console.log('🎯 Ending session tracking...');
-    sessionActive = false;
-    
-    // Stop tracking
-    stopClickTracking();
-    stopNavigationTracking();
-    
-    // Stop STT session
-    stopSTTSession();
-    
-    // Add final step with STT results
-    addSessionStep('session_end', {
-      url: window.location.href,
-      timestamp: new Date().toISOString(),
-      duration: Date.now() - sessionStartTime,
-      stt_results: sttResults
-    });
-    
-    // Create session JSON
-    const sessionData = createSessionJSON();
-    
-    console.log('📊 Session data:', sessionData);
-    
-    // Clear session state from storage
-    clearSessionState();
-    
-    // Send to Firebase
-    await sendSessionDataToFirebase(sessionData);
-    
-    // Process session with Gemini API for tutorial generation
-    await processSessionWithGemini(sessionData);
-    
-    showSTTNotification('Session ended and data sent', 'success');
-    console.log('✅ Session tracking ended');
-  }
-  
-  // Join existing session from another tab
-  function joinExistingSession(sessionData) {
-    console.log('🔄 Joining existing session...');
-    sessionActive = true;
-    sessionStartTime = sessionData.sessionStartTime;
-    sessionSteps = sessionData.sessionSteps || [];
-    startingUrl = sessionData.startingUrl;
-    
-    // Add step for joining session
-    addSessionStep('tab_joined', {
-      url: window.location.href,
-      timestamp: new Date().toISOString()
-    });
-    
-    // Start tracking in this tab
-    startClickTracking();
-    startNavigationTracking();
-    
-    // Resume STT session if it was active
-    if (sessionActive) {
-      startSTTSession();
-    }
-    
-    showSTTNotification('Joined existing session', 'info');
-    console.log('✅ Joined session with', sessionSteps.length, 'steps');
-  }
-  
-  // Save session state to storage
-  function saveSessionState() {
-    try {
-      if (typeof chrome !== 'undefined' && chrome.storage) {
-        const sessionState = {
-          sessionActive: sessionActive,
-          sessionStartTime: sessionStartTime,
-          sessionSteps: sessionSteps,
-          startingUrl: startingUrl
-        };
-        chrome.storage.local.set({ 'opheliaSession': sessionState });
-        console.log('💾 Session state saved:', sessionSteps.length, 'steps');
-      }
-    } catch (error) {
-      // Ignore extension context invalidated errors
-      if (error.message !== 'Extension context invalidated') {
-        console.error('❌ Failed to save session state:', error);
-      }
-    }
-  }
-  
-  // Clear session state from storage
-  function clearSessionState() {
-    try {
-      if (typeof chrome !== 'undefined' && chrome.storage) {
-        chrome.storage.local.remove('opheliaSession');
-      }
-    } catch (error) {
-      // Ignore extension context invalidated errors
-      if (error.message !== 'Extension context invalidated') {
-        console.error('❌ Failed to clear session state:', error);
-      }
-    }
-  }
-  
-  // Check for existing session on tab load
-  function checkForExistingSession() {
-    chrome.storage.local.get(['opheliaSession'], (result) => {
-      if (result.opheliaSession && result.opheliaSession.sessionActive) {
-        console.log('🔄 Found existing session, joining...');
-        joinExistingSession(result.opheliaSession);
-      }
-    });
-  }
-  
-  // Check for pending tutorial on tab load
-  function checkForPendingTutorial() {
-    chrome.storage.local.get(['pendingTutorial'], (result) => {
-      if (result.pendingTutorial) {
-        const { steps, stepIndex = 0 } = result.pendingTutorial;
-        console.log(`🔄 Found pending tutorial, resuming from step ${stepIndex + 1}/${steps.length}...`);
-        chrome.storage.local.remove('pendingTutorial');
-        executeTutorial(steps, null, stepIndex);
-      }
-    });
-  }
-  
-  // Setup intelligent mouse following for sphere
-  function setupMouseFollowing(sphere) {
-    let mouseX = window.innerWidth - 30; // Initial position (bottom-right)
-    let mouseY = window.innerHeight - 30;
-    let sphereX = mouseX;
-    let sphereY = mouseY;
-    let isFollowing = false;
-    let followTimeout = null;
-    const offsetDistance = 40; // Keep sphere 40px away from mouse
-    
-    // Track mouse movement
-    document.addEventListener('mousemove', (e) => {
-      mouseX = e.clientX;
-      mouseY = e.clientY;
-      
-      // Start following when mouse moves
-      if (!isFollowing) {
-        isFollowing = true;
-        sphere.style.bottom = 'auto';
-        sphere.style.right = 'auto';
-      }
-      
-      // Clear any existing timeout
-      if (followTimeout) {
-        clearTimeout(followTimeout);
-      }
-      
-      // Set timeout to stop following after mouse stops moving
-      followTimeout = setTimeout(() => {
-        isFollowing = false;
-        // Return to default position
-        sphere.style.bottom = '20px';
-        sphere.style.right = '20px';
-        sphere.style.left = 'auto';
-        sphere.style.top = 'auto';
-      }, 2000); // Stop following after 2 seconds of no mouse movement
-    });
-    
-    // Smooth following animation
-    function animate() {
-      // Do not move sphere during tutorial mode
-      if (!tutorialModeActive && isFollowing) {
-        // Calculate target position with offset from mouse
-        // Position sphere to the bottom-right of mouse cursor
-        const targetX = mouseX + offsetDistance;
-        const targetY = mouseY + offsetDistance;
-        
-        // Smoothly interpolate towards target position
-        const easing = 0.1;
-        sphereX += (targetX - sphereX) * easing;
-        sphereY += (targetY - sphereY) * easing;
-        
-        // Update sphere position (centered on target position)
-        sphere.style.left = sphereX + 'px';
-        sphere.style.top = sphereY + 'px';
-        sphere.style.bottom = 'auto';
-        sphere.style.right = 'auto';
-      }
-      
-      requestAnimationFrame(animate);
-    }
-    
-    // Start animation loop
-    animate();
-  }
-  
-  // Add step to session
-  function addSessionStep(type, data) {
-    const step = {
-      step_id: sessionSteps.length + 1,
-      type: type,
-      timestamp: data.timestamp || new Date().toISOString(),
-      data: data
-    };
-    sessionSteps.push(step);
-    console.log(`📝 Step added: ${type}`, step);
-    
-    // Save state after each step
-    if (sessionActive) {
-      saveSessionState();
-    }
-  }
-  
-  // Start click tracking
-  function startClickTracking() {
-    clickListener = (event) => {
-      if (!sessionActive) return;
-      
-      const element = event.target;
-      const elementInfo = extractElementInfo(element);
-      
-      if (elementInfo) {
-        addSessionStep('click', {
-          element_id: elementInfo.id,
-          element_label: elementInfo.label,
-          element_position: elementInfo.pos,
-          url: window.location.href
-        });
-      }
-    };
-    
-    document.addEventListener('click', clickListener, true);
-    console.log('🖱️ Click tracking started');
-  }
-  
-  // Stop click tracking
-  function stopClickTracking() {
-    if (clickListener) {
-      document.removeEventListener('click', clickListener, true);
-      clickListener = null;
-      console.log('🖱️ Click tracking stopped');
-    }
-  }
-  
-  // Start navigation tracking
-  function startNavigationTracking() {
-    let lastURL = window.location.href;
-    
-    navigationListener = setInterval(() => {
-      if (!sessionActive) return;
-      
-      const currentURL = window.location.href;
-      if (currentURL !== lastURL) {
-        addSessionStep('navigation', {
-          from_url: lastURL,
-          to_url: currentURL,
-          timestamp: new Date().toISOString()
-        });
-        lastURL = currentURL;
-      }
-    }, 500); // Check every 500ms
-  }
-  
-  // Stop navigation tracking
-  function stopNavigationTracking() {
-    if (navigationListener) {
-      clearInterval(navigationListener);
-      navigationListener = null;
-      console.log('🧭 Navigation tracking stopped');
-    }
-  }
-  
-  // Create session JSON schema
-  function createSessionJSON() {
-    return {
-      context: {
-        session_id: `session_${sessionStartTime}_${Math.random().toString(36).substr(2, 9)}`,
-        start_time: new Date(sessionStartTime).toISOString(),
-        end_time: new Date().toISOString(),
-        duration: Date.now() - sessionStartTime,
-        total_steps: sessionSteps.length,
-        start_url: sessionSteps[0]?.data?.url || window.location.href,
-        end_url: window.location.href
-      },
-      steps: sessionSteps
-    };
-  }
-  
-  // Send session data to Firebase
-  async function sendSessionDataToFirebase(sessionData) {
-    try {
-      console.log('📤 Sending session data to Firebase via Cloudflare Worker...');
-      
-      // Extract STT results from session end step
-      let sttResults = [];
-      const sessionEndStep = sessionData.steps.find(step => step.type === 'session_end');
-      if (sessionEndStep && sessionEndStep.data.stt_results) {
-        sttResults = sessionEndStep.data.stt_results;
-      }
-      
-      // Convert session data to Firebase format
-      const firebaseData = {
-        fields: {
-          session_id: { stringValue: sessionData.context.session_id },
-          start_time: { stringValue: sessionData.context.start_time },
-          end_time: { stringValue: sessionData.context.end_time },
-          duration: { integerValue: sessionData.context.duration },
-          total_steps: { integerValue: sessionData.context.total_steps },
-          start_url: { stringValue: sessionData.context.start_url },
-          end_url: { stringValue: sessionData.context.end_url },
-          steps: { stringValue: JSON.stringify(sessionData.steps) },
-          stt_results: { stringValue: JSON.stringify(sttResults) }
-        }
-      };
-      
-      // Call Cloudflare Worker
-      const response = await fetch(`${firebaseWorkerUrl}/save-session`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ firebaseData })
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
-      }
-      
-      const result = await response.json();
-      console.log('✅ Session data sent to Firebase with ID:', result.name);
-      showSTTNotification(`Session sent: ${result.name.split('/').pop()}`, 'success');
-      
-    } catch (error) {
-      console.error('❌ Failed to send session data to Firebase:', error);
-      showSTTNotification(`Firebase error: ${error.message}`, 'error');
-    }
-  }
-  
-  // Process session data with Gemini API for tutorial generation
-  async function processSessionWithGemini(sessionData) {
-    try {
-      console.log('🤖 Processing session with Gemini API via Cloudflare Worker...');
-      
-      // Check if geminiConfig is available
-      if (!geminiConfig) {
-        console.log('⚠️ Gemini config not initialized, skipping tutorial generation');
-        return;
-      }
-      
-      // Extract STT results and steps
-      let sttResults = [];
-      const sessionEndStep = sessionData.steps.find(step => step.type === 'session_end');
-      if (sessionEndStep && sessionEndStep.data.stt_results) {
-        sttResults = sessionEndStep.data.stt_results;
-      }
-      
-      // Build user input from STT results
-      const userInput = sttResults.map(result => result.text).join(' ');
-      
-      // Build DOM data from steps
-      const domData = sessionData.steps.filter(step => 
-        step.type === 'click' || step.type === 'navigation'
-      );
-      
-      // System prompt for tutorial generation
-      const systemPrompt = `You are a helpful tutor. This is a tutorial with DOM data and user guidance. Your job is to create a step by step process, generate 1 liner instructions based on the user input (STT) and match it with the actual steps.
 
-Output format: JSON schema with step number, DOM elements data to interact with, and instruction.
-
-Example output format:
-{
-  "steps": [
-    {
-      "step_number": 1,
-      "instruction": "Click on the login button",
-      "dom_element": {
-        "id": "login-btn",
-        "label": "Login",
-        "tag": "button",
-        "position": {"x": 100, "y": 200}
-      }
-    }
-  ]
-}`;
-
-      // Build request body
-      const requestBody = {
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `${systemPrompt}\n\nUser Input (STT): ${userInput}\n\nDOM Data: ${JSON.stringify(domData, null, 2)}\n\nGenerate the tutorial steps in JSON format.` }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 2048
-        }
-      };
-      
-      // Call Gemini API via Cloudflare Worker
-      const response = await fetch(geminiConfig.workerUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`Gemini API Error: ${error.error?.message || response.statusText}`);
-      }
-      
-      const data = await response.json();
-      const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      
-      console.log('🤖 Gemini tutorial response:', aiResponse);
-      
-      // Parse JSON from response
-      let tutorialSteps = {};
-      try {
-        // Extract JSON from markdown code blocks if present
-        const jsonMatch = aiResponse.match(/```json\n([\s\S]*?)\n```/) || aiResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          tutorialSteps = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-        } else {
-          tutorialSteps = JSON.parse(aiResponse);
-        }
-      } catch (parseError) {
-        console.error('❌ Failed to parse Gemini JSON response:', parseError);
-        tutorialSteps = { steps: [], raw_response: aiResponse };
-      }
-      
-      // Save tutorial to recording_session collection
-      await saveTutorialToFirebase(sessionData.context.session_id, tutorialSteps, userInput, domData);
-      
-      showSTTNotification('Tutorial generated and saved', 'success');
-      console.log('✅ Tutorial generation complete');
-      
-    } catch (error) {
-      console.error('❌ Failed to process session with Gemini:', error);
-      showSTTNotification(`Tutorial generation error: ${error.message}`, 'error');
-    }
-  }
-  
-  // Save tutorial to recording_session collection
-  async function saveTutorialToFirebase(sessionId, tutorialSteps, userInput, domData) {
+  async function sendToTutor(text) {
+    if (!tutorEnabled || !geminiTutor) return;
     try {
-      console.log('📤 Saving tutorial to recording_session collection via Cloudflare Worker...');
-      console.log('📤 Session ID:', sessionId);
-      console.log('📤 Tutorial steps:', tutorialSteps);
-      
-      const firebaseData = {
-        fields: {
-          session_id: { stringValue: sessionId },
-          tutorial_steps: { stringValue: JSON.stringify(tutorialSteps) },
-          user_input: { stringValue: userInput },
-          dom_data: { stringValue: JSON.stringify(domData) },
-          starting_url: { stringValue: startingUrl || window.location.href },
-          created_at: { stringValue: new Date().toISOString() }
-        }
-      };
-      
-      console.log('📤 Firebase data:', firebaseData);
-      
-      // Call Cloudflare Worker
-      const response = await fetch(`${firebaseWorkerUrl}/save-tutorial`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ firebaseData })
-      });
-      
-      console.log('📤 Worker response status:', response.status);
-      
-      if (!response.ok) {
-        const error = await response.json();
-        console.error('📤 Worker error:', error);
-        throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
-      }
-      
-      const result = await response.json();
-      console.log('✅ Tutorial saved to Firebase with ID:', result.name);
-      
-      // Generate and display tutorial URL
-      const tutorialUrl = generateTutorialUrl(sessionId);
-      console.log('🔗 Tutorial URL:', tutorialUrl);
-      showSTTNotification(`Tutorial URL: ${tutorialUrl}`, 'success');
-      
-    } catch (error) {
-      console.error('❌ Failed to save tutorial to Firebase:', error);
-      throw error;
-    }
-  }
-  
-  // Generate tutorial URL
-  function generateTutorialUrl(sessionId) {
-    return `https://testophelia.vercel.app/tutorial.html?id=${sessionId}`;
-  }
-  
-  // Load tutorial from Firebase
-  async function loadTutorialFromFirebase(sessionId) {
-    try {
-      console.log('📥 Loading tutorial from Firebase via Cloudflare Worker:', sessionId);
-      
-      // Call Cloudflare Worker
-      const response = await fetch(`${firebaseWorkerUrl}/load-tutorial?sessionId=${sessionId}`);
-      
-      if (!response.ok) {
-        const error = await response.json();
-        console.error('📊 Worker error:', error);
-        throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('📊 Firebase response:', data);
-      
-      // Find the tutorial by session_id
-      let tutorial = data.tutorial;
-      
-      if (!tutorial) {
-        console.error('❌ Tutorial not found in Firebase response');
-        console.error('Looking for session_id:', sessionId);
-        throw new Error('Tutorial not found');
-      }
-      
-      console.log('📊 Tutorial structure:', tutorial);
-      
-      // Parse tutorial steps - handle nested structure
-      const tutorialStepsData = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
-      const tutorialSteps = tutorialStepsData.steps || tutorialStepsData;
-      console.log('📚 Tutorial steps loaded:', tutorialSteps);
-      
-      // Get starting URL from Firebase field
-      let entryUrl = null;
-      if (tutorial.fields.starting_url) {
-        entryUrl = tutorial.fields.starting_url.stringValue;
-        console.log('🌐 Entry URL from starting_url field:', entryUrl);
-      }
-      
-      // Execute tutorial with entry URL
-      await executeTutorial(tutorialSteps, entryUrl);
-      
-    } catch (error) {
-      console.error('❌ Failed to load tutorial from Firebase:', error);
-      showSTTNotification(`Tutorial load error: ${error.message}`, 'error');
-    }
-  }
-  
-  // Execute tutorial steps
-  async function executeTutorial(tutorialSteps, entryUrl = null, startIndex = 0) {
-    try {
-      console.log('🚀 Starting guided tutorial...');
-      
-      // Navigate to entry URL if provided (only on first load, startIndex === 0)
-      if (entryUrl && startIndex === 0) {
-        console.log('🌐 Navigating to entry URL:', entryUrl);
-        chrome.storage.local.set({ 'pendingTutorial': { steps: tutorialSteps, stepIndex: 0 } });
-        chrome.runtime.sendMessage({ action: 'navigate', url: entryUrl });
-        return;
-      }
-      
-      // Activate tutorial mode - disables mouse following
-      tutorialModeActive = true;
-      console.log('🛑 Tutorial mode ON - pointer will not follow mouse');
-      
-      // Run steps starting from startIndex
-      for (let i = startIndex; i < tutorialSteps.length; i++) {
-        const step = tutorialSteps[i];
-        const elementData = step.dom_element || step;
-        const stepUrl = step.data?.url || step.url || null;
-        
-        console.log(`📍 Step ${i + 1}/${tutorialSteps.length}: "${step.instruction}"`);
-        showSTTNotification(`Step ${i + 1}: ${step.instruction}`, 'info');
-        
-        // Wait for DOM to settle
-        await new Promise(resolve => setTimeout(resolve, 800));
-        
-        // Find element using 4-tier strategy
-        const element = await findElementByAttributes(elementData);
-        
-        if (!element) {
-          console.warn(`⚠️ Step ${i + 1}: element not found, retrying in 2s...`);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const retryElement = await findElementByAttributes(elementData);
-          if (!retryElement) {
-            console.warn(`⚠️ Step ${i + 1}: still not found, skipping`);
-            continue;
-          }
-        }
-        
-        const foundElement = element || await findElementByAttributes(elementData);
-        if (!foundElement) continue;
-        
-        // Pin pointer to element
-        const rect = foundElement.getBoundingClientRect();
-        positionPointerAt({
-          x: rect.left + rect.width / 2,
-          y: rect.top + rect.height / 2
-        });
-        
-        // Goal 4: Apply pulse class to target element (CSS-driven, no inline overrides)
-        foundElement.classList.add('ophelia-target');
-        
-        console.log(`⏳ Step ${i + 1}: waiting for user interaction...`);
-        
-        // Wait for user interaction - returns whether page navigated
-        const navigated = await waitForInteractionOrNavigation(foundElement);
-        
-        // Remove pulse highlight
-        foundElement.classList.remove('ophelia-target');
-        
-        console.log(`✅ Step ${i + 1} done`);
-        
-        // If the page navigated, persist remaining steps and stop here
-        if (navigated) {
-          const nextIndex = i + 1;
-          if (nextIndex < tutorialSteps.length) {
-            console.log(`🌐 Page navigated - storing remaining steps from index ${nextIndex}`);
-            chrome.storage.local.set({ 'pendingTutorial': { steps: tutorialSteps, stepIndex: nextIndex } });
-          }
-          return;
-        }
-      }
-      
-      // Tutorial complete
-      tutorialModeActive = false;
-      console.log('✅ Tutorial complete!');
-      showSTTNotification('Tutorial complete! 🎉', 'success');
-      
-      // Restore sphere to default position
-      const sphere = document.getElementById('cross-tab-sphere');
-      if (sphere) {
-        sphere.style.animation = '';
-        sphere.style.left = 'auto';
-        sphere.style.top = 'auto';
-        sphere.style.bottom = '20px';
-        sphere.style.right = '20px';
-      }
-      
-    } catch (error) {
-      console.error('❌ Tutorial execution failed:', error);
-      showSTTNotification(`Tutorial error: ${error.message}`, 'error');
-    }
-  }
-  
-  // Wait for user interaction - resolves with boolean indicating if page navigated
-  async function waitForInteractionOrNavigation(element) {
-    return new Promise((resolve) => {
-      const startUrl = window.location.href;
-      let done = false;
-      
-      const finish = (navigated) => {
-        if (done) return;
-        done = true;
-        document.removeEventListener('click', clickHandler, true);
-        clearInterval(navCheck);
-        resolve(navigated);
-      };
-      
-      // Listen for any click anywhere in the document
-      const clickHandler = (e) => {
-        console.log('🖱️ Click detected on:', e.target.tagName);
-        // Small delay to allow navigation to start
-        setTimeout(() => {
-          const navigated = window.location.href !== startUrl;
-          finish(navigated);
-        }, 200);
-      };
-      
-      document.addEventListener('click', clickHandler, true);
-      
-      // Also poll for URL change (for programmatic navigations)
-      const navCheck = setInterval(() => {
-        if (window.location.href !== startUrl) {
-          console.log('🌐 URL changed detected by poll');
-          finish(true);
-        }
-      }, 300);
-    });
-  }
-  
-  // Find element by attributes using 4-tier semantic fallback strategy
-  async function findElementByAttributes(elementData) {
-    // Tier 1a: Stable CSS selector path (most precise)
-    if (elementData.selector) {
-      try {
-        const el = document.querySelector(elementData.selector);
-        if (el) {
-          console.log('✅ Tier 1a SUCCESS: Found element by selector path');
-          return el;
-        }
-      } catch (e) { /* invalid selector, continue */ }
-      console.log('⏭️ Tier 1a FAILED: Selector path did not match');
-    }
-    
-    console.log('🔍 Tier 1b: Checking for exact ID (non-injected)...');
-    
-    // Tier 1b: Exact ID (Fastest) - only if not injected
-    if (elementData.id && !String(elementData.id).startsWith('injected_')) {
-      const element = document.getElementById(elementData.id);
-      if (element) {
-        console.log('✅ Tier 1b SUCCESS: Found element by exact ID:', elementData.id);
-        return element;
-      }
-      console.log('⏭️ Tier 1b FAILED: Element not found by ID');
-    } else {
-      console.log('⏭️ Tier 1b SKIPPED: No valid ID or injected ID detected');
-    }
-    
-    console.log('🔍 Tier 2: Checking ARIA and Test IDs...');
-    
-    // Tier 2: ARIA and Test IDs (Crucial for React/Icons)
-    if (elementData.label) {
-      // Exact match for aria-label or data-testid
-      const exactMatch = document.querySelector(`[aria-label="${elementData.label}" i], [data-testid="${elementData.label}" i]`);
-      if (exactMatch) {
-        console.log('✅ Tier 2 SUCCESS: Found element by exact ARIA/test ID match:', elementData.label);
-        return exactMatch;
-      }
-      
-      // Partial match for aria-label or data-testid
-      const partialMatch = Array.from(document.querySelectorAll('[aria-label], [data-testid]')).find(el => {
-        const ariaLabel = el.getAttribute('aria-label');
-        const testId = el.getAttribute('data-testid');
-        return (ariaLabel && ariaLabel.toLowerCase().includes(elementData.label.toLowerCase())) ||
-               (testId && testId.toLowerCase().includes(elementData.label.toLowerCase()));
-      });
-      
-      if (partialMatch) {
-        console.log('✅ Tier 2 SUCCESS: Found element by partial ARIA/test ID match:', elementData.label);
-        return partialMatch;
-      }
-      
-      console.log('⏭️ Tier 2 FAILED: No ARIA/test ID match found');
-    } else {
-      console.log('⏭️ Tier 2 SKIPPED: No label provided');
-    }
-    
-    console.log('🔍 Tier 3: Checking XPath for interactive tags...');
-    
-    // Tier 3: Strict Text Content via XPath (Avoids Wrapper Snag)
-    if (elementData.label) {
-      const interactiveTags = ['button', 'a', 'span'];
-      for (const tag of interactiveTags) {
-        const xpath = `//${tag}[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${elementData.label.toLowerCase()}')]`;
-        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-        const element = result.singleNodeValue;
-        
-        if (element) {
-          console.log('✅ Tier 3 SUCCESS: Found element by XPath text match in <' + tag + '>');
-          return element;
-        }
-      }
-      console.log('⏭️ Tier 3 FAILED: No XPath match found in interactive tags');
-    } else {
-      console.log('⏭️ Tier 3 SKIPPED: No label provided');
-    }
-    
-    console.log('🔍 Tier 4: Checking spatial/coordinate fallback...');
-    
-    // Tier 4: Spatial/Coordinate Fallback
-    if (elementData.tag && elementData.position) {
-      const elements = document.getElementsByTagName(elementData.tag);
-      const targetX = elementData.position.x;
-      const targetY = elementData.position.y;
-      
-      for (const el of elements) {
-        const rect = el.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-        
-        if (Math.abs(centerX - targetX) < 50 && Math.abs(centerY - targetY) < 50) {
-          console.log('✅ Tier 4 SUCCESS: Found element by spatial match (within 50px)');
-          return el;
-        }
-      }
-      console.log('⏭️ Tier 4 FAILED: No spatial match found');
-    } else {
-      console.log('⏭️ Tier 4 SKIPPED: No tag or position provided');
-    }
-    
-    console.log('❌ All 4 tiers failed: Element not found');
-    return null;
-  }
-  
-  // Position pointer (sphere) at specific coordinates
-  function positionPointerAt(position) {
-    console.log('🎯 Positioning pointer at:', position);
-    
-    // Globally disable mouse following animation loop
-    tutorialModeActive = true;
-    
-    // Get or create sphere
-    let sphere = document.getElementById('cross-tab-sphere');
-    if (!sphere) return;
-    
-    // Fix sphere position
-    sphere.style.left = `${position.x}px`;
-    sphere.style.top = `${position.y}px`;
-    sphere.style.bottom = 'auto';
-    sphere.style.right = 'auto';
-    sphere.style.position = 'fixed';
-    sphere.style.zIndex = '10000';
-    sphere.style.opacity = '1';
-    sphere.style.animation = 'pulse 1s ease-in-out infinite';
-    
-    console.log('✅ Pointer pinned at element (mouse following disabled)');
-  }
-  
-  // Send STT result to Gemini Tutor
-  async function sendToTutor(userMessage) {
-    if (!isTutorEnabled || !geminiTutor) {
-      console.log('❌ Gemini Tutor not available');
-      return;
-    }
-    
-    try {
-      const response = await geminiTutor.getTutoringResponse(userMessage);
-      
-      // Display tutor response
-      console.log('🤖 AI Response:', response);
-      showSTTNotification(`AI: "${response}"`, 'success');
-      
-      // Update status to speaking and activate TTS
-      currentStatus = 'speaking';
+      window.OpheliaNotify('Thinking…', 'info');
+      const response = await geminiTutor.getTutoringResponse(text);
+      window.OpheliaNotify(`🤖 ${response}`, 'success');
       speakResponse(response);
-      
-    } catch (error) {
-      console.error('❌ Tutor response failed:', error);
-      showSTTNotification(`Tutor error: ${error.message}`, 'error');
-      currentStatus = 'background';
+    } catch (e) {
+      console.error('❌ Tutor error:', e);
+      window.OpheliaNotify(`AI error: ${e.message}`, 'error');
     }
   }
-  
-  // Text-to-Speech function
+
   function speakResponse(text) {
-    if (!isTTSEnabled || !speechSynthesis) {
-      console.log('🔊 TTS disabled or not available');
-      return;
-    }
-    
-    // Stop any ongoing speech
-    speechSynthesis.cancel();
-    
-    // Create new utterance
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-    
-    // Event handlers
-    utterance.onstart = () => {
-      console.log('🔊 TTS started - speaking response');
-      isTTSSpeaking = true;
-    };
-    
-    utterance.onend = () => {
-      console.log('🔊 TTS finished');
-      isTTSSpeaking = false;
-      currentStatus = 'background';
-    };
-    
-    utterance.onerror = (event) => {
-      console.error('❌ TTS Error:', event.error);
-      isTTSSpeaking = false;
-      currentStatus = 'background';
-    };
-    
-    // Start speaking
-    speechSynthesis.speak(utterance);
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt    = new SpeechSynthesisUtterance(text.substring(0, 300));
+    utt.rate     = 1.0;
+    utt.pitch    = 1.0;
+    utt.volume   = 0.9;
+    window.speechSynthesis.speak(utt);
   }
-  
-  // Notification function
-  function showSTTNotification(message, type = 'info') {
-    // Remove existing notification
-    const existing = document.querySelector('.stt-notification');
-    if (existing) {
-      existing.remove();
-    }
-    
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = `stt-notification stt-${type}`;
-    notification.textContent = message;
-    
-    // Style notification
-    notification.style.position = 'fixed';
-    notification.style.top = '20px';
-    notification.style.right = '20px';
-    notification.style.padding = '10px 15px';
-    notification.style.borderRadius = '5px';
-    notification.style.color = 'white';
-    notification.style.fontSize = '14px';
-    notification.style.zIndex = '10001';
-    notification.style.opacity = '0';
-    notification.style.transition = 'opacity 0.3s ease';
-    
-    // Set background color based on type
-    switch (type) {
-      case 'success':
-        notification.style.backgroundColor = '#4CAF50';
-        break;
-      case 'error':
-        notification.style.backgroundColor = '#f44336';
-        break;
-      case 'info':
-        notification.style.backgroundColor = '#2196F3';
-        break;
-      default:
-        notification.style.backgroundColor = '#ff7a1a';
-    }
-    
-    // Add to page
-    document.body.appendChild(notification);
-    
-    // Fade in
-    setTimeout(() => {
-      notification.style.opacity = '1';
-    }, 10);
-    
-    // Remove after 4 seconds
-    setTimeout(() => {
-      notification.style.opacity = '0';
-      setTimeout(() => {
-        notification.remove();
-      }, 300);
-    }, 4000);
-  }
-  
-  // Microphone control functions
-  function requestMicrophoneAccess() {
-    if (!audioContext) {
-      console.error('❌ Audio context not initialized');
-      return;
-    }
-    
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
-        microphoneStream = stream;
-        console.log('🎤 Microphone access granted');
-      })
-      .catch(error => {
-        console.error('❌ Microphone access denied:', error);
-      });
-  }
-  
-  function stopMicrophone() {
-    if (microphoneStream) {
-      microphoneStream.getTracks().forEach(track => track.stop());
-      microphoneStream = null;
-      console.log('🎤 Microphone stopped');
-    }
-  }
-  
-  // Cleanup on page unload
-  window.addEventListener('beforeunload', () => {
-    stopMicrophone();
-    
-    if (recognition && isSTTActive) {
-      stopSTTSession();
-    }
-    
-    // Stop TTS
-    if (speechSynthesis) {
-      speechSynthesis.cancel();
-      console.log('🔊 TTS stopped');
-    }
-    
-    console.log('🧹 Cleanup completed');
-  });
-  
-  // DOM scanning function
-  function scanDOM() {
-    console.log('🔍 Scanning DOM for interactive elements...');
-    
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    
-    // Only target genuinely interactive elements - avoids wrapper-snag on plain divs
-    const interactiveSelectors = [
-      'button', 'a[href]', 'input', 'select', 'textarea',
-      '[role="button"]', '[role="link"]', '[role="menuitem"]',
-      '[role="tab"]', '[role="option"]', '[role="checkbox"]',
-      '[role="radio"]', '[role="combobox"]', '[role="searchbox"]',
-      '[aria-label]', '[data-testid]'
-    ];
-    
+
+  // ── scanDOM exposed for legacy/Gemini tutor context ───────────────────────
+  window.scanDOM = () => {
     const elements = [];
-    const seen = new Set();
-    
-    const allElements = document.querySelectorAll(interactiveSelectors.join(', '));
-    
-    allElements.forEach((element) => {
-      try {
-        const rect = element.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(element);
-        
-        // Skip invisible / hidden elements
-        if (computedStyle.display === 'none' ||
-            computedStyle.visibility === 'hidden' ||
-            parseFloat(computedStyle.opacity) === 0 ||
-            rect.width === 0 || rect.height === 0) {
-          return;
+    const seen     = new Set();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const sel = 'button,a[href],input,select,textarea,[role="button"],[role="link"],[role="menuitem"],[role="tab"],[aria-label],[data-testid]';
+
+    document.querySelectorAll(sel).forEach(el => {
+      const r  = el.getBoundingClientRect();
+      const cs = window.getComputedStyle(el);
+      if (cs.display === 'none' || r.width === 0) return;
+      if (r.top >= vh || r.bottom <= 0 || r.left >= vw || r.right <= 0) return;
+
+      const aria  = el.getAttribute('aria-label') || '';
+      const label = aria || (el.textContent || '').trim().substring(0, 60) || el.tagName;
+      const key   = `${label}|${Math.round(r.left)}|${Math.round(r.top)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      elements.push({
+        label,
+        aria_label:  aria || null,
+        data_testid: el.getAttribute('data-testid') || null,
+        tag:         el.tagName.toLowerCase(),
+        pos: {
+          x: Math.round(r.left + r.width  / 2),
+          y: Math.round(r.top  + r.height / 2)
         }
-        
-        // Goal 1: Only include elements visible in the current viewport
-        const inViewport = rect.top < vh && rect.bottom > 0 && rect.left < vw && rect.right > 0;
-        if (!inViewport) return;
-        
-        // Deduplicate by selector path
-        const info = extractElementInfo(element);
-        if (!info || seen.has(info.selector)) return;
-        seen.add(info.selector);
-        
-        elements.push(info);
-        
-      } catch (error) {
-        console.warn('Error processing element:', error);
-      }
+      });
     });
-    
-    const context = {
-      url: window.location.href,
-      domain: window.location.hostname,
-      page_title: document.title
-    };
-    
-    const result = { context, elements };
-    
-    console.log(`📊 DOM scan complete: ${elements.length} visible interactive elements`);
-    return result;
-  }
-  
-  // Display DOM scan result on screen temporarily
-  function displayDOMScanResult(result) {
-    // Create overlay element
-    const overlay = document.createElement('div');
-    overlay.id = 'dom-scan-overlay';
-    overlay.style.position = 'fixed';
-    overlay.style.top = '10px';
-    overlay.style.left = '10px';
-    overlay.style.right = '10px';
-    overlay.style.bottom = '10px';
-    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
-    overlay.style.color = 'white';
-    overlay.style.zIndex = '10002';
-    overlay.style.padding = '20px';
-    overlay.style.borderRadius = '10px';
-    overlay.style.overflow = 'auto';
-    overlay.style.fontFamily = 'monospace';
-    overlay.style.fontSize = '12px';
-    overlay.style.maxHeight = '80vh';
-    
-    // Add close button
-    const closeButton = document.createElement('button');
-    closeButton.textContent = '✕ Close';
-    closeButton.style.position = 'absolute';
-    closeButton.style.top = '10px';
-    closeButton.style.right = '10px';
-    closeButton.style.backgroundColor = '#ff4444';
-    closeButton.style.color = 'white';
-    closeButton.style.border = 'none';
-    closeButton.style.padding = '5px 10px';
-    closeButton.style.borderRadius = '5px';
-    closeButton.style.cursor = 'pointer';
-    closeButton.onclick = () => overlay.remove();
-    
-    // Add title
-    const title = document.createElement('h2');
-    title.textContent = 'DOM Scan Result';
-    title.style.marginTop = '0';
-    title.style.color = '#4CAF50';
-    
-    // Add context section
-    const contextSection = document.createElement('div');
-    contextSection.innerHTML = '<h3>Context:</h3>';
-    contextSection.innerHTML += `<pre>${JSON.stringify(result.context, null, 2)}</pre>`;
-    
-    // Add elements section
-    const elementsSection = document.createElement('div');
-    elementsSection.innerHTML = `<h3>Elements (${result.elements.length}):</h3>`;
-    elementsSection.innerHTML += `<pre>${JSON.stringify(result.elements, null, 2)}</pre>`;
-    
-    // Assemble overlay
-    overlay.appendChild(closeButton);
-    overlay.appendChild(title);
-    overlay.appendChild(contextSection);
-    overlay.appendChild(elementsSection);
-    
-    // Add to page
-    document.body.appendChild(overlay);
-    
-    // Auto-remove after 10 seconds
-    setTimeout(() => {
-      if (overlay.parentNode) {
-        overlay.remove();
-      }
-    }, 10000);
-  }
-  
-  // Expose functions to global scope for debugging
-  window.opheliaExtension = {
-    startListening: () => startSTTSession(),
-    stopListening: () => stopSTTSession(),
-    scanDOM: scanDOM,
-    getStatus: () => currentStatus,
-    clearChatHistory: () => {
-      if (geminiTutor) {
-        geminiTutor.clearHistory();
-        showSTTNotification('Chat history cleared', 'success');
-      }
-    },
-    getChatHistoryLength: () => {
-      if (geminiTutor) {
-        return geminiTutor.getHistoryLength();
-      }
-      return 0;
-    }
+
+    return { context: { url: location.href, title: document.title }, elements };
   };
-  
-  // Also expose directly for easier access
-  window.scanDOM = scanDOM;
 })();
