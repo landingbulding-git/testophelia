@@ -111,10 +111,12 @@ window.OpheliaPlayer = (() => {
       await sleep(400);
 
       window.OpheliaOverlay.show({ stepNumber: i + 1, totalSteps: steps.length, instruction, element: el });
+      speak(instruction);
 
       // Wait for any interaction (click OR programmatic URL change)
       await waitForInteraction();
       window.OpheliaOverlay.hide();
+      stopSpeaking();
 
       // Sleep 500ms to give Chrome a window to kill this page if it was a real
       // full-page navigation. If the page dies, JS stops here and PLAY_KEY
@@ -132,6 +134,7 @@ window.OpheliaPlayer = (() => {
     window.opheliaTutorialActive = false;
     window.OpheliaOverlay.hide();
     chrome.storage.local.remove(PLAY_KEY);
+    speak('Tutorial complete!');
     notify('Tutorial complete! 🎉', 'success');
     console.log('🏁 Tutorial complete');
   }
@@ -141,7 +144,43 @@ window.OpheliaPlayer = (() => {
     window.opheliaTutorialActive = false;
     window.OpheliaOverlay.hide();
     chrome.storage.local.remove(PLAY_KEY);
+    stopSpeaking();
     notify('Tutorial stopped.', 'info');
+  }
+
+  // ── Text-to-Speech ────────────────────────────────────────────────────────
+
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    stopSpeaking();
+
+    const utt  = new SpeechSynthesisUtterance(text);
+    utt.rate   = 1.05;
+    utt.pitch  = 1.0;
+    utt.volume = 1.0;
+
+    const doSpeak = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(v =>
+        v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha'))
+      ) || voices.find(v => v.lang.startsWith('en'));
+      if (preferred) utt.voice = preferred;
+      window.speechSynthesis.speak(utt);
+    };
+
+    // Voices load asynchronously on first use
+    if (window.speechSynthesis.getVoices().length > 0) {
+      doSpeak();
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.onvoiceschanged = null;
+        doSpeak();
+      };
+    }
+  }
+
+  function stopSpeaking() {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
   }
 
   // ── 5-Tier element finder ────────────────────────────────────────────────
