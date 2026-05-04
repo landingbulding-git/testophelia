@@ -968,6 +968,8 @@ Example output format:
   async function saveTutorialToFirebase(sessionId, tutorialSteps, userInput, domData) {
     try {
       console.log('📤 Saving tutorial to recording_session collection via Cloudflare Worker...');
+      console.log('📤 Session ID:', sessionId);
+      console.log('📤 Tutorial steps:', tutorialSteps);
       
       const firebaseData = {
         fields: {
@@ -979,6 +981,8 @@ Example output format:
         }
       };
       
+      console.log('📤 Firebase data:', firebaseData);
+      
       // Call Cloudflare Worker
       const response = await fetch(`${firebaseWorkerUrl}/save-tutorial`, {
         method: 'POST',
@@ -988,8 +992,11 @@ Example output format:
         body: JSON.stringify({ firebaseData })
       });
       
+      console.log('📤 Worker response status:', response.status);
+      
       if (!response.ok) {
         const error = await response.json();
+        console.error('📤 Worker error:', error);
         throw new Error(`Firebase API Error: ${error.error?.message || response.statusText}`);
       }
       
