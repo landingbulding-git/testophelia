@@ -523,6 +523,7 @@
     sessionActive = true;
     sessionStartTime = Date.now();
     sessionSteps = [];
+    startingUrl = window.location.href; // Capture starting URL
     
     // Save session state to storage
     saveSessionState();
@@ -977,6 +978,7 @@ Example output format:
           tutorial_steps: { stringValue: JSON.stringify(tutorialSteps) },
           user_input: { stringValue: userInput },
           dom_data: { stringValue: JSON.stringify(domData) },
+          starting_url: { stringValue: startingUrl || window.location.href },
           created_at: { stringValue: new Date().toISOString() }
         }
       };
@@ -1052,17 +1054,11 @@ Example output format:
       const tutorialSteps = tutorialStepsData.steps || tutorialStepsData;
       console.log('📚 Tutorial steps loaded:', tutorialSteps);
       
-      // Parse dom_data to get entry URL
+      // Get starting URL from Firebase field
       let entryUrl = null;
-      if (tutorial.fields.dom_data) {
-        const domData = JSON.parse(tutorial.fields.dom_data.stringValue);
-        console.log('📊 DOM data:', domData);
-        
-        // Get the first step's URL as entry URL
-        if (domData.length > 0 && domData[0].url) {
-          entryUrl = domData[0].url;
-          console.log('🌐 Entry URL from dom_data:', entryUrl);
-        }
+      if (tutorial.fields.starting_url) {
+        entryUrl = tutorial.fields.starting_url.stringValue;
+        console.log('🌐 Entry URL from starting_url field:', entryUrl);
       }
       
       // Execute tutorial with entry URL
