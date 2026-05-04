@@ -12,7 +12,6 @@ window.OpheliaAssistant = (() => {
   let _waitingForAction = false;
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
-  let _pointerDotEl  = null;
   let _badgeEl = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -400,71 +399,29 @@ window.OpheliaAssistant = (() => {
     return window.OpheliaPlayer?.findElement(d) || null;
   }
 
-  // ── Element highlight (self-contained CSS + pointer dot) ───────────────────
-
-  function _ensureHighlightCSS() {
-    if (document.getElementById('ophelia-highlight-css')) return;
-    const s = document.createElement('style');
-    s.id = 'ophelia-highlight-css';
-    s.textContent = `
-      .ophelia-agent-highlight {
-        outline: 3px solid #4285f4 !important;
-        outline-offset: 4px !important;
-        border-radius: 4px !important;
-        animation: opheliaAgentPulse 1.6s ease-in-out infinite !important;
-        position: relative !important;
-        z-index: 999998 !important;
-      }
-      @keyframes opheliaAgentPulse {
-        0%,100% { outline-color:#4285f4; box-shadow:0 0 0 0 rgba(66,133,244,0.45); }
-        50%     { outline-color:#66a3ff; box-shadow:0 0 0 10px rgba(66,133,244,0); }
-      }
-      @keyframes opheliaDotPulse {
-        0%,100% { transform:translateY(0) scale(1);   opacity:1; }
-        50%     { transform:translateY(-4px) scale(1.2); opacity:0.8; }
-      }
-    `;
-    document.head.appendChild(s);
-  }
+  // ── Element highlight — delegates to OpheliaOverlay (same as tutorial player) ─
 
   function _highlightElement(el) {
     _clearHighlight();
     if (!el) return;
-    _ensureHighlightCSS();
-
     _highlightedEl = el;
-    el.classList.add('ophelia-agent-highlight');
 
-    // Pointer dot above the element
-    const r   = el.getBoundingClientRect();
-    const dot = document.createElement('div');
-    dot.id = 'ophelia-pointer-dot';
-    dot.style.cssText = [
-      'position:fixed',
-      `left:${Math.round(r.left + r.width / 2 - 9)}px`,
-      `top:${Math.round(r.top - 24)}px`,
-      'width:18px', 'height:18px',
-      'background:#ff6d00',
-      'border:2px solid #fff',
-      'border-radius:50%',
-      'z-index:2147483646',
-      'pointer-events:none',
-      'animation:opheliaDotPulse 1s ease-in-out infinite',
-      'box-shadow:0 2px 8px rgba(255,109,0,0.6)'
-    ].join(';');
-    document.body.appendChild(dot);
-    _pointerDotEl = dot;
+    // Use the overlay for identical orange dot + target glow as the tutorial player
+    window.OpheliaOverlay.show({
+      stepNumber: _stepCount,
+      totalSteps: _stepCount + 1, // dummy — keeps progress bar non-NaN
+      instruction: '',             // TTS handles the instruction
+      element: el,
+      onCorrect: null
+    });
+
+    // Remove the instruction card — we only want the dot and element highlight
+    document.getElementById('ophelia-card')?.remove();
   }
 
   function _clearHighlight() {
-    if (_highlightedEl) {
-      _highlightedEl.classList.remove('ophelia-agent-highlight');
-      _highlightedEl = null;
-    }
-    if (_pointerDotEl) {
-      _pointerDotEl.remove();
-      _pointerDotEl = null;
-    }
+    window.OpheliaOverlay.hide();
+    _highlightedEl = null;
   }
 
   // ── Element format ──────────────────────────────────────────────────────────
