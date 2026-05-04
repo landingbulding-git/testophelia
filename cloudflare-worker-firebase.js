@@ -159,26 +159,13 @@ async function loadTutorial(request, apiKey, projectId) {
     
     const data = await response.json();
     
-    // Get the first matching document - Firebase structured query returns different format
-    let tutorial = null;
-    if (data && data.length > 0) {
-      // Check if the first element has a document property
-      if (data[0].document) {
-        tutorial = data[0].document;
-      } else {
-        // The document might be directly in the array
-        tutorial = data[0];
-      }
-    }
-    
+    // Return the full raw Firebase response for debugging
     return new Response(JSON.stringify({ 
-      tutorial, 
+      rawFirebaseResponse: data,
       debug: { 
         sessionId, 
         query: requestBody,
-        responseLength: data.length,
-        found: !!tutorial,
-        firstElement: data[0] ? Object.keys(data[0]) : []
+        responseLength: data.length
       } 
     }), {
       headers: {

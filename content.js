@@ -1034,40 +1034,11 @@ Example output format:
       }
       
       const data = await response.json();
-      console.log('📊 Firebase response:', data);
-      console.log('📊 Debug info:', data.debug);
+      console.log('📊 Full Firebase response:', data);
+      console.log('📊 Raw Firebase response:', data.rawFirebaseResponse);
       
-      // Find the tutorial by session_id
-      let tutorial = data.tutorial;
-      
-      if (!tutorial) {
-        console.error('❌ Tutorial not found in Firebase response');
-        console.error('Looking for session_id:', sessionId);
-        console.error('Available documents:', data.debug?.responseLength || 0);
-        console.error('Query used:', data.debug?.query);
-        throw new Error('Tutorial not found');
-      }
-      
-      console.log('📊 Tutorial structure:', tutorial);
-      console.log('📊 Tutorial keys:', Object.keys(tutorial));
-      
-      // Parse tutorial steps - handle different structures
-      let tutorialSteps;
-      if (tutorial.fields && tutorial.fields.tutorial_steps) {
-        tutorialSteps = JSON.parse(tutorial.fields.tutorial_steps.stringValue);
-      } else if (tutorial.tutorial_steps) {
-        tutorialSteps = JSON.parse(tutorial.tutorial_steps);
-      } else {
-        console.error('❌ Tutorial structure unknown:', tutorial);
-        throw new Error('Tutorial structure unknown');
-      }
-      
-      console.log('📚 Tutorial steps loaded:', tutorialSteps);
-      
-      // Execute tutorial
-      await executeTutorial(tutorialSteps);
-      
-      showSTTNotification('Tutorial loaded and executing', 'success');
+      // For now, just log the raw response - we'll parse it later
+      showSTTNotification('Raw Firebase response logged to console', 'info');
       
     } catch (error) {
       console.error('❌ Failed to load tutorial from Firebase:', error);
