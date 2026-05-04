@@ -62,6 +62,13 @@ window.OpheliaAssistant = (() => {
     _micActive    = true;
     _setDotLabel('🔴 Listening…  (press Ctrl+Shift+U to send)');
 
+    // Sphere → red glow (per MECHANISM_RULES)
+    const sphere = document.getElementById('cross-tab-sphere');
+    if (sphere) {
+      sphere.style.background  = '#ff2222';
+      sphere.style.boxShadow   = '0 0 20px #ff0000, 0 0 40px rgba(255,0,0,0.4)';
+    }
+
     _mic = new SR();
     _mic.lang            = 'en-US';
     _mic.continuous      = true;   // keep open until _stopMic()
@@ -105,6 +112,14 @@ window.OpheliaAssistant = (() => {
       _mic = null;
     }
     _clearDotLabel();
+
+    // Sphere → orange (inactive state)
+    const sphere = document.getElementById('cross-tab-sphere');
+    if (sphere) {
+      sphere.style.background = '#ff7a1a';
+      sphere.style.boxShadow  = '0 0 16px #ff7a1a';
+    }
+
     const text = _micFinalText.trim();
     _micFinalText = '';
     const cb = _micCallback;
