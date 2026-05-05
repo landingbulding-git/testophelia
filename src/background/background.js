@@ -261,12 +261,23 @@ async function _swRawText({ max_tokens, system, messages, stream }) {
 }
 
 async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, stepFailed }) {
-  const lang = language || 'en';
+  const lang       = language || 'en';
+  const platformId = _getPlatformId(pageUrl);
 
   const planCtx = Array.isArray(plan) && plan.length
     ? `\n\nSESSION PLAN (execute the most appropriate next step based on what\'s visible on screen):\n` +
       plan.map((s, i) => `${i + 1}. ${s}`).join('\n')
     : '';
+
+  // 6B: live gateway docs for registered platforms; static KB for all others
+  let platformCtx = '';
+  if (platformId) {
+    const planHint  = Array.isArray(plan) && plan.length ? plan[0] : '';
+    const liveDocs  = await _fetchPlatformDocs(platformId, planHint);
+    if (liveDocs) platformCtx = `\n\nPLATFORM DOCUMENTATION (${platformId}):\n${liveDocs}`;
+  } else {
+    platformCtx = _getPlatformHints(pageUrl);
+  }
 
   const system =
     `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
@@ -286,7 +297,7 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
     `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
     `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}` +
     planCtx +
-    _getPlatformHints(pageUrl) +
+    platformCtx +
     (stepFailed
       ? `\n\nSTEP FAILED: The previous action had no visible effect — the DOM did not change after the user clicked. Use the inspect_element tool to diagnose why. Then explain clearly what went wrong and what the user should do instead. Do NOT repeat the same instruction.`
       : '');
@@ -350,7 +361,6 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
   // ── Tool path: fast path had no element — retry with tools ──────────────────
   console.log('\uD83D\uDD27 SW analyze: no element in stream, trying tool-use\u2026');
 
-  const platformId = _getPlatformId(pageUrl);
   const tools = [
     {
       name: 'get_accessibility_tree',
