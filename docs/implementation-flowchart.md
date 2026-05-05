@@ -143,7 +143,7 @@ Popup slider:
 │  2B  Streaming TTS ──────────────────────── 4 hours  ✅ DONE     │
 │      └─ SSE stream from Worker, extract instruction field early     │
 │                                                                     │
-│  2C  Cross-Page Memory ────────────────────── 3 hours              │
+│  2C  Cross-Page Memory ────────────────── 3 hours  ✅ DONE     │
 │      └─ chrome.storage.session persist, resume prompt on init       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -205,8 +205,9 @@ SSE reader loop:
 
 ---
 
-### 2C — Cross-Page Memory
-**File:** `src/content/assistant.js` + `src/content/content.js`
+### 2C — Cross-Page Memory ✅ DONE
+**Files:** `src/content/assistant.js` | `src/content/content.js`
+**Commit:** `feat: 2C cross-page memory — session.storage persist, 10s resume prompt on page load`
 
 ```
 After each _analyze():

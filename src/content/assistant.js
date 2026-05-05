@@ -16,6 +16,8 @@ window.OpheliaAssistant = (() => {
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
   let _ttsRate        = 1.05; // loaded from chrome.storage.sync on session start
+  let _pendingResume  = null;  // {goal, stepCount} waiting for Ctrl+Space confirmation
+  let _resumeTimer    = null;  // auto-discard timeout
 
   // ── Screenshot cache ─────────────────────────────────────────────────
   let _lastPageKey    = '';   // "href|scrollBucket" of last capture
@@ -34,6 +36,18 @@ window.OpheliaAssistant = (() => {
     // If mic is open: second press commits the recording
     if (_micActive) { _stopMic(); return; }
 
+    // If a cross-page resume is pending, Ctrl+Space = confirm resume
+    if (_pendingResume) {
+      clearTimeout(_resumeTimer);
+      const { goal, stepCount } = _pendingResume;
+      _pendingResume = null;
+      _clearDotLabel();
+      _goal = goal; _stepCount = stepCount; _messages = []; _active = true;
+      _watchPage();
+      _analyze('Resuming previous session. What is the next step toward the goal?');
+      return;
+    }
+
     if (_active) {
       // Session running: let user correct or ask via voice
       _listenForMessage();
@@ -41,6 +55,21 @@ window.OpheliaAssistant = (() => {
       if (window.opheliaTutorialActive) window.OpheliaPlayer?.stop();
       _listenForGoal();
     }
+  }
+
+  async function checkResume() {
+    if (_active) return;
+    try {
+      const { opheliaSession } = await chrome.storage.session.get('opheliaSession');
+      if (!opheliaSession?.goal) return;
+      _pendingResume = opheliaSession;
+      _setDotLabel('🔄 Resume? Ctrl+Space');
+      _speak(`Resume "${opheliaSession.goal}"? Press Ctrl+Space to continue.`);
+      _resumeTimer = setTimeout(() => {
+        _pendingResume = null;
+        _clearDotLabel();
+      }, 10000);
+    } catch (_) {}
   }
 
   function stop() {
@@ -53,6 +82,9 @@ window.OpheliaAssistant = (() => {
     _clearDotLabel();
     window.speechSynthesis?.cancel();
     _goal = ''; _messages = []; _stepCount = 0;
+    clearTimeout(_resumeTimer);
+    _pendingResume = null;
+    chrome.storage.session.remove('opheliaSession').catch(() => {});
   }
 
   function isActive() { return _active; }
@@ -285,6 +317,8 @@ window.OpheliaAssistant = (() => {
     }
 
     _stepCount++;
+    // Persist session for cross-page resume (goal only — messages reset on new page)
+    chrome.storage.session.set({ opheliaSession: { goal: _goal, stepCount: _stepCount } }).catch(() => {});
 
     // 5a. Goal complete
     if (step.done) {
@@ -791,5 +825,5 @@ window.OpheliaAssistant = (() => {
       : (window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.onvoiceschanged = null; go(); });
   }
 
-  return { activate, stop, isActive };
+  return { activate, stop, isActive, checkResume };
 })();

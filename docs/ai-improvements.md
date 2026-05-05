@@ -125,7 +125,9 @@ This adds one small Claude call but prevents Claude from giving impossible steps
 
 ---
 
-## 6. Cross-Page Memory (Session Persistence)
+## 6. Cross-Page Memory ✅ IMPLEMENTED
+
+> `_analyze()` saves `{goal, stepCount}` to `chrome.storage.session` after each step. `checkResume()` reads it on page load and speaks a resume prompt. `Ctrl+Space` within 10s confirms resume; timeout discards it. `stop()` clears the session. `content.js` calls `checkResume()` 800ms after init. (Session Persistence)
 
 **Problem:** When the user navigates to a new page, `_messages` history is preserved in memory but lost on hard refresh or tab close.
 

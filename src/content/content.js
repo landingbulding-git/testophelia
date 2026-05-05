@@ -102,8 +102,8 @@
   // always fires as long as the content script is loaded.
 
   document.addEventListener('keydown', (e) => {
-    // Ctrl+Shift+U  (Mac: Ctrl = MacCtrl = e.ctrlKey, not e.metaKey)
-    if (e.ctrlKey && e.shiftKey && (e.key === 'U' || e.key === 'u') && !e.metaKey && !e.altKey) {
+    // Ctrl+Space  (Mac: Ctrl = MacCtrl = e.ctrlKey, not e.metaKey)
+    if (e.ctrlKey && e.code === 'Space' && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
       window.OpheliaAssistant?.activate();
@@ -122,6 +122,8 @@
     if (document.getElementById('cross-tab-sphere')) return;
     createSphere();
     initGeminiTutor();
+    // Check for a resumable session from a previous page (800ms delay lets all scripts load)
+    setTimeout(() => window.OpheliaAssistant?.checkResume(), 800);
   }
 
   // ── Sphere ────────────────────────────────────────────────────────────────
