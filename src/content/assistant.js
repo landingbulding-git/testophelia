@@ -520,7 +520,7 @@ window.OpheliaAssistant = (() => {
 
     return new Promise(resolve => {
       chrome.runtime.sendMessage(
-        { action: 'analyze', apiMessages, language: navigator.language || 'en', plan: _plan },
+        { action: 'analyze', apiMessages, language: navigator.language || 'en', plan: _plan, pageUrl: location.href },
         step => {
           if (chrome.runtime.lastError) {
             console.error('\u274c SW analyze error:', chrome.runtime.lastError.message);

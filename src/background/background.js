@@ -5,6 +5,114 @@ const CLAUDE_WORKER   = 'https://ophelia-gemini-worker.norbertb-consulting.worke
 const MIN_CALL_GAP_MS = 2000; // min ms between main analyze calls
 let   _swLastCallAt   = 0;
 
+// ── 4C: Developer Knowledge — platform-specific selector hints ──────────────
+const PLATFORM_KB = {
+  'facebook.com': [
+    'Navigation links use aria-label, not visible text (e.g. aria-label="Home")',
+    'Post composer: role="textbox" with aria-label containing "What\'s on your mind"',
+    'Like/React toolbar: div[role="toolbar"] inside each post',
+    'Profile picture and story rings: div[role="img"] not <img>',
+    'Share button opens a dialog — target the dialog\'s share options after it appears',
+    'Settings gear: aria-label="Settings & privacy" or "Account"',
+  ],
+  'instagram.com': [
+    'All action buttons use SVG icons — find them via aria-label on the parent <button> or <a>',
+    'New post: button with aria-label="New post"',
+    'Like a post: button with aria-label="Like" inside the post article',
+    'DM / Direct: anchor with aria-label="Direct"',
+    'Profile: anchor with aria-label containing the username',
+  ],
+  'gmail.com': [
+    'Compose button: div[role="button"] with aria-label="Compose"',
+    'Email rows: tr[role="row"] in the inbox list',
+    'Search bar: input with aria-label="Search mail"',
+    'Toolbar actions appear after selecting an email: div[role="button"] (Archive, Delete, etc.)',
+    'Left sidebar labels: li[role="treeitem"]',
+    'Send button inside compose: div[role="button"] with aria-label="Send"',
+  ],
+  'mail.google.com': [
+    'Compose button: div[role="button"] with aria-label="Compose"',
+    'Search bar: input with aria-label="Search mail"',
+    'Send: div[role="button"] aria-label="Send ‪(Ctrl-Enter)‬"',
+  ],
+  'twitter.com': [
+    'Prefer aria-label over text content for all icon buttons',
+    'Tweet compose box: role="textbox", aria-label="Post text"',
+    'Post/tweet button: data-testid="tweetButton"',
+    'Follow button: data-testid="follow"',
+    'Like button: data-testid="like"',
+    'Retweet: data-testid="retweet"',
+  ],
+  'x.com': [
+    'Same structure as twitter.com — all icons use aria-label',
+    'Compose box: role="textbox", aria-label="Post text"',
+    'Post button: data-testid="tweetButton"',
+    'Follow button: data-testid="follow"',
+    'Like: data-testid="like"',
+    'Retweet: data-testid="retweet"',
+  ],
+  'linkedin.com': [
+    'Primary nav anchors use aria-label (e.g. aria-label="Home")',
+    'Start a post: button with text "Start a post" or aria-label="Create a post"',
+    'Connect/Follow button: role="button" with visible text "Connect" or "Follow"',
+    'Messages: aria-label="Messaging"',
+    'Notifications: aria-label="Notifications"',
+    'Job listings: role="listitem" with visible job title and company text',
+  ],
+  'youtube.com': [
+    'Search bar: input[id="search"] with aria-label="Search"',
+    'Search submit: button[id="search-icon-legacy"]',
+    'Subscribe: button with aria-label containing "Subscribe to"',
+    'Like: button with aria-label containing "like this video"',
+    'Player controls use aria-label (Play, Pause, Volume, Fullscreen)',
+    'Sidebar guide: nav[aria-label="Guide"]',
+  ],
+  'google.com': [
+    'Main search input: textarea[aria-label="Search"] or input[name="q"]',
+    'Search button: input[name="btnK"] or button with aria-label="Google Search"',
+    'Search results: each result is a div[data-sokoban-container] or h3 inside an <a>',
+  ],
+  'docs.google.com': [
+    'Toolbar buttons: role="button" with aria-label (e.g. aria-label="Bold")',
+    'Editor area: div[role="textbox"] or div[contenteditable="true"]',
+    'Menu bar items (File, Edit, Format): role="menuitem" or role="button" with visible text',
+    'Share button: aria-label="Share"',
+    'Comments: button with aria-label="Insert comment" or aria-label="Open comment"',
+  ],
+  'sheets.google.com': [
+    'Cell input: id="waffle-grid-container" — click a cell then type',
+    'Formula bar: id="t-formula-bar-input"',
+    'Toolbar buttons use aria-label',
+    'Sheet tabs at bottom: role="tab" with aria-label containing sheet name',
+  ],
+  'github.com': [
+    'Primary nav: role="navigation"',
+    'Star repo: button with aria-label="Star this repository"',
+    'File tree: role="tree" with role="treeitem" children',
+    'Issues and PRs: table rows use role="row"',
+    'Create new: button or link with aria-label containing "New"',
+    'Code search: input with aria-label="Search or jump to..."',
+  ],
+  'amazon.com': [
+    'Main search box: id="twotabsearchtextbox"',
+    'Search button: id="nav-search-submit-button"',
+    'Add to Cart: id="add-to-cart-button"',
+    'Buy Now: id="buy-now-button"',
+    'Product results in search: div[data-component-type="s-search-result"]',
+    'Price: span[class*="a-price"] span[aria-hidden="true"]',
+  ],
+};
+
+function _getPlatformHints(url) {
+  if (!url) return '';
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    const hints = PLATFORM_KB[host];
+    if (!hints?.length) return '';
+    return `\n\nPLATFORM KNOWLEDGE (${host}):\n` + hints.map(h => `\u2022 ${h}`).join('\n');
+  } catch (_) { return ''; }
+}
+
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 chrome.commands.onCommand.addListener((command) => {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -117,7 +225,7 @@ async function _swRawText({ max_tokens, system, messages, stream }) {
   return data.content?.[0]?.text || '';
 }
 
-async function _handleAnalyze({ apiMessages, language, plan, tabId }) {
+async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
   const lang = language || 'en';
 
   const planCtx = Array.isArray(plan) && plan.length
@@ -142,7 +250,8 @@ async function _handleAnalyze({ apiMessages, language, plan, tabId }) {
     `RESPOND WITH ONLY VALID JSON \u2014 no prose, no markdown fences:\n` +
     `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
     `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}` +
-    planCtx;
+    planCtx +
+    _getPlatformHints(pageUrl);
 
   const tools = [
     {
