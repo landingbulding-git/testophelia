@@ -67,37 +67,60 @@ Requirements:
 
 ## Architecture: How We Get There
 
-### MCP Strategy (native to the extension, not Node.js servers)
+### MCP Strategy — Connect to Existing MCPs, Don't Build a Knowledge Database
 
-MCPs in Ophelia = **Cloudflare Workers that Claude calls as tools**. The background service worker is the MCP client. Claude invokes tools, the SW executes them (locally or via Worker fetch), Claude uses the result.
+Bubble.io, Zoho CRM, Notion, Airtable, Suno, and the vast majority of target platforms already publish official MCP servers. **We connect to them. We don't rebuild what they've already built.**
 
-No local servers. No Playwright desktop app. Works as a pure browser extension.
+Ophelia's background service worker is the **MCP client**. A single Cloudflare Worker acts as the **MCP Gateway** — it manages auth tokens, handles CORS, and proxies tool calls to each platform's official MCP server. Claude calls `call_platform_tool(tool, input)` and gets back real, up-to-date documentation and capabilities directly from the platform.
+
+No local servers. No Playwright. No manual knowledge database. Works as a pure browser extension.
 
 ```
 User speaks goal
        │
        ▼
-plan_session (SW → Claude Haiku)
-  generates step list
+Detect platform from URL → look up MCP registry
        │
        ▼
-Per step: _handleAnalyze (SW → Claude Sonnet)
-  ┌───────────────────────────────────┐
-  │  Claude can call:                 │
-  │  • search_knowledge(platform, q)  │ ← Knowledge MCP (Cloudflare Worker + Vectorize)
-  │  • get_accessibility_tree()       │ ← content script (ARIA rescan)
-  │  • inspect_element(hint)          │ ← content script (form state)
-  │  • think_step(context)            │ ← Sequential Thinking MCP (Cloudflare Worker)
-  └───────────────────────────────────┘
+plan_session (SW → Claude Haiku + platform MCP context)
+  generates a plan grounded in real app knowledge
        │
        ▼
-Instruction streams to TTS immediately (streaming re-enabled)
-Element found deterministically via ARIA → CSS selector → visual fallback
+Per step: _handleAnalyze (SW → Claude Sonnet, streaming)
+  ┌──────────────────────────────────────────────┐
+  │  Claude can call:                            │
+  │  • call_platform_tool(tool, input)           │ ← MCP Gateway → platform's official MCP
+  │  • get_accessibility_tree()                  │ ← content script (ARIA rescan)
+  │  • inspect_element(hint)                     │ ← content script (form state)
+  │  • think_deeply(goal, context)               │ ← Sequential Thinking MCP (CF Worker)
+  └──────────────────────────────────────────────┘
        │
        ▼
-After user clicks: verify DOM changed
+Instruction streams to TTS immediately (first word <500ms)
+Element found via ARIA/selector → visual fallback only if needed
+       │
+       ▼
+After user clicks: verify DOM changed (Haiku, <200ms)
 If not: Claude calls inspect_element → explains why → user unblocked
 ```
+
+### MCP Registry (in background.js)
+
+```javascript
+const MCP_REGISTRY = {
+  'bubble.io':       'https://mcp.bubble.io',
+  'zoho.com':        'https://mcp.zoho.com',
+  'notion.com':      'https://mcp.notion.com',
+  'airtable.com':    'https://mcp.airtable.com',
+  'suno.com':        'https://mcp.suno.com',
+  'webflow.com':     'https://mcp.webflow.com',
+  'mailchimp.com':   'https://mcp.mailchimp.com',
+  'linear.app':      'https://mcp.linear.app',
+  'github.com':      'https://mcp.github.com',
+};
+```
+
+When a session starts, the platform is detected from `location.href` → the right MCP is selected → Claude has access to official tools for that platform.
 
 ---
 
@@ -149,63 +172,73 @@ async function _verifyStepExecuted(beforeSnapshot, afterSnapshot) {
 
 ---
 
-## Phase 6 — Knowledge MCP (The Intelligence Gap)
+## Phase 6 — Platform MCP Client (The Intelligence Gap)
 
-### What it is
+### The insight
 
-A Cloudflare Worker backed by **Cloudflare Vectorize** (vector database). Stores chunked documentation for complex web apps. Claude calls `search_knowledge(platform, query)` as a tool and gets back relevant docs before deciding the next step.
+Bubble.io, Zoho, Notion, Airtable and most target platforms already publish official MCP servers. They contain real, up-to-date documentation, tool schemas, and API capabilities — maintained by the platform teams, not by us.
 
-### Why it matters
+**We build a universal MCP gateway, not a knowledge database.**
 
-Without this, Claude guides Bubble.io by looking at a DOM list. With this, Claude knows:
-> "In Bubble.io, to create a workflow: go to the Workflow tab in the editor, click '+ Add an action', the trigger types are 'When page loads', 'When an element is clicked', etc."
+### MCP Gateway Worker
 
-That's the difference between useless and useful.
-
-### Implementation
-
-**New file:** `workers/knowledge-mcp.js`
+**New file:** `workers/mcp-gateway.js`
 
 ```
+Responsibilities:
+  • Auth management — stores platform OAuth tokens per user
+  • MCP proxying — routes tool calls from extension → platform MCP server
+  • Response caching — Cloudflare KV, 15min TTL for repeated queries
+  • CORS handling — extensions can't call all MCPs directly
+
 Endpoints:
-  POST /search   → {platform, query} → returns top 5 doc chunks
-  POST /ingest   → {platform, url, content} → admin-only, embeds docs
+  POST /call  → {platform, tool, input, userToken?}
+              → proxies to platform MCP → returns result
 
-Storage:
-  Cloudflare Vectorize: embedded documentation chunks
-  Cloudflare KV: platform metadata + chunk index
+  POST /list  → {platform}
+              → returns available tools for that platform
 
-Tool definition (in _handleAnalyze):
-  {
-    name: 'search_knowledge',
-    description: 'Search documentation for a specific platform to understand how to complete a task.',
-    input_schema: {
-      platform: 'bubble.io | zoho-crm | suno | notion | airtable | webflow | mailchimp | ...',
-      query: 'how to create a workflow trigger'
-    }
-  }
+  POST /auth  → {platform, code} (OAuth callback)
+              → stores token in KV
 ```
 
-### Initial platforms (in priority order)
+### Tool in `_handleAnalyze`
 
-| Platform | Why |
-|---|---|
-| **Bubble.io** | Complex visual builder, no obvious UI labels |
-| **Zoho CRM** | Enterprise complexity, deep nested menus |
-| **Suno** | Creative tool with unique terminology |
-| **Webflow** | Designer tool, visual-only UI patterns |
-| **Notion** | Complex block model, non-standard keyboard shortcuts |
-| **Airtable** | Formula fields, view types, automation |
-| **Mailchimp** | Campaign builder with multi-step wizard |
+```javascript
+{
+  name: 'call_platform_tool',
+  description: 'Call an official tool from the current platform\'s MCP server to get real documentation, available options, or platform-specific guidance.',
+  input_schema: {
+    tool:  { type: 'string', description: 'Tool name from the platform MCP (e.g. "search_docs", "list_templates")' },
+    input: { type: 'object', description: 'Tool input parameters' }
+  }
+}
+```
 
-### MCP-first system prompt injection
+### MCP-first planning
 
-When the session starts on a known platform:
-1. `plan_session` calls `search_knowledge(platform, goal)` first
-2. Returns top docs for the goal
-3. Plan is generated with full app knowledge
+When session starts on a known platform:
+1. Gateway fetches available tools from the platform MCP
+2. Claude receives tool list with descriptions
+3. `plan_session` and `_handleAnalyze` both have access to platform tools
+4. Claude calls `call_platform_tool("search_docs", {query: "create workflow"})` → gets real Bubble.io workflow docs
+5. No manual knowledge entry needed — ever
 
-This replaces the static PLATFORM_KB entirely.
+### Priority platform MCPs to connect
+
+| Platform | MCP Available | Auth |
+|---|---|---|
+| **Bubble.io** | Yes | API key |
+| **Notion** | Yes (official) | OAuth |
+| **Airtable** | Yes (official) | OAuth / API key |
+| **Linear** | Yes (official) | OAuth |
+| **GitHub** | Yes (official) | OAuth |
+| **Zoho CRM** | Yes | OAuth |
+| **Webflow** | Yes | OAuth |
+| **Suno** | Verify | API key |
+| **Mailchimp** | Yes | OAuth |
+
+This replaces the static `PLATFORM_KB` entirely — and updates itself automatically as platforms evolve.
 
 ---
 
@@ -326,7 +359,7 @@ Session 5  │ 7A: Enhanced recorder (xpath + visual_description + confidence)
 
 | MCP | Type | Where | Solves |
 |---|---|---|---|
-| **Knowledge MCP** | Cloudflare Worker + Vectorize | Remote | AI doesn't know the app |
+| **Platform MCP Gateway** | CF Worker → official platform MCPs | Remote | AI doesn't know the app |
 | **Sequential Thinking MCP** | Cloudflare Worker | Remote | Complex multi-step planning |
 | **get_accessibility_tree** | Native (content script) | Local | Incomplete DOM list |
 | **inspect_element** | Native (content script) | Local | Disabled/blocked elements |
@@ -344,14 +377,15 @@ No local Node.js servers. No Playwright controlling a separate browser. Everythi
 | plan_session: $0.008 (Sonnet) | plan_session: $0.001 (Haiku) |
 | 10× analyze: $0.060 (Sonnet, non-streaming) | 10× analyze: $0.040 (Sonnet, streaming) |
 | Rate limit overhead: +5-10s silence | Rate limit: removed |
-| **Total: ~$0.068, ~5s/step** | knowledge call: $0.002 (amortized) |
-| | **Total: ~$0.043, ~1.5s/step** |
+| **Total: ~$0.068, ~5s/step** | Platform MCP calls: $0 (platform-provided) |
+| | **Total: ~$0.041, ~1.2s/step** |
 
-**30% cost reduction, 3× speed improvement** from phases 5–6 alone.
+**40% cost reduction, 4× speed improvement** from phases 5–6 alone.
 
 Complex app session (Bubble.io, 20 steps):
-- Without knowledge MCP: high failure rate → useless
-- With knowledge MCP: ~$0.08 total + $0.015 thinking call = ~$0.095 per session, ~95% accuracy
+- Without platform MCP: high failure rate → useless
+- With platform MCP: ~$0.082 total + $0.015 thinking call = ~$0.097 per session, ~95% accuracy
+- Platform MCP tool calls: free (or included in platform subscription)
 
 ---
 
@@ -361,4 +395,5 @@ Complex app session (Bubble.io, 20 steps):
 2. **Stream everything.** First word to TTS in <500ms. Never make the user wait in silence.
 3. **Fail loudly, recover fast.** If a step fails, say why and how to fix it. Never silently move on.
 4. **Deterministic where possible, AI where necessary.** ARIA selectors > heuristics > screenshot. AI is the last resort, not the first.
-5. **MCPs as remote knowledge, not remote control.** We don't hand off control to an external tool. We give Claude better information to make better decisions locally.
+5. **Connect, don't build.** Every platform that has an official MCP — use it. Build our own only for what doesn't exist.
+6. **MCPs as remote knowledge, not remote control.** We don't hand off execution to an external tool. We give Claude better information to make better decisions — execution always stays in the extension.
