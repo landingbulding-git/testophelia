@@ -145,7 +145,9 @@ This adds one small Claude call but prevents Claude from giving impossible steps
 
 ---
 
-## 8. Persona & Language Selection
+## 8. Persona / Language Selection ✅ IMPLEMENTED
+
+> `navigator.language` injected into system prompt in `_callClaude()`. `_speak()` uses `_ttsRate` (loaded from `chrome.storage.sync` on session start) and `utt.lang`. Popup gained a Voice Speed slider that persists via `chrome.storage.sync`.
 
 **Problem:** All instructions are in English, rate/pitch fixed.
 

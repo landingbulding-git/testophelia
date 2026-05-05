@@ -15,6 +15,7 @@ window.OpheliaAssistant = (() => {
   let _waitingForAction = false;
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
+  let _ttsRate        = 1.05; // loaded from chrome.storage.sync on session start
 
   // ── Screenshot cache ─────────────────────────────────────────────────
   let _lastPageKey    = '';   // "href|scrollBucket" of last capture
@@ -222,6 +223,12 @@ window.OpheliaAssistant = (() => {
     _active = true;
     _stepCount = 0;
     _lastPageKey = ''; _lastScreenshot = null; _stepsSinceNav = 0;
+
+    // Load persisted TTS rate preference
+    try {
+      const s = await chrome.storage.sync.get('ttsRate');
+      if (typeof s.ttsRate === 'number') _ttsRate = s.ttsRate;
+    } catch (_) {}
 
     _watchPage();
     await _analyze('What is the first step the user should take?');
@@ -497,7 +504,8 @@ window.OpheliaAssistant = (() => {
             `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
             `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
             `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
-            `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n\n` +
+            `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n` +
+            `Language: respond in "${navigator.language || 'en'}" — translate instructions naturally if not English.\n\n` +
             `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
             `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
             `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`,
@@ -682,7 +690,8 @@ window.OpheliaAssistant = (() => {
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
     if (onEnd) utt.onend = onEnd;
-    utt.rate = 1.05; utt.pitch = 1.0; utt.volume = 1.0;
+    utt.rate = _ttsRate; utt.pitch = 1.0; utt.volume = 1.0;
+    utt.lang = navigator.language || 'en-US';
     const go = () => {
       const v    = window.speechSynthesis.getVoices();
       const pref = v.find(x => x.lang.startsWith('en') &&

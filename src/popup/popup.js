@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const linkSection = document.getElementById('linkSection');
   const linkUrl     = document.getElementById('linkUrl');
   const btnCopy     = document.getElementById('btnCopy');
+  const ttsSlider   = document.getElementById('ttsRate');
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -80,6 +81,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ── Poll while popup is open (recording step count updates) ──────────────
+
+  // ── TTS rate slider ───────────────────────────────────────────────────────
+  const { ttsRate } = await chrome.storage.sync.get('ttsRate');
+  if (typeof ttsRate === 'number') ttsSlider.value = ttsRate;
+
+  ttsSlider.addEventListener('input', () => {
+    chrome.storage.sync.set({ ttsRate: parseFloat(ttsSlider.value) });
+  });
 
   await refresh();
   const poll = setInterval(refresh, 1500);

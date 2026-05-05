@@ -142,7 +142,36 @@
     }
     .link-copy:hover { color: #fff; }
 
-    /* ── Info row ───────────────────────────────────────────────── */
+    /* ── Voice speed slider ─────────────────────────────── */
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .speed-label {
+      font-size: 11px;
+      color: #555;
+      white-space: nowrap;
+    }
+    .speed-slider {
+      -webkit-appearance: none;
+      flex: 1;
+      height: 3px;
+      border-radius: 2px;
+      background: #2a2a2a;
+      outline: none;
+      cursor: pointer;
+    }
+    .speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ff7a1a;
+      cursor: pointer;
+    }
+
+    /* ── Info row ──────────────────────────────────────────────── */
     .info-row {
       display: flex;
       gap: 6px;
@@ -191,12 +220,23 @@
     </div>
   </div>
 
+  <!-- Voice speed -->
+  <div class="section">
+    <div class="section-label">Voice Speed</div>
+    <div class="speed-row">
+      <span class="speed-label">Slow</span>
+      <input type="range" class="speed-slider" id="ttsRate"
+             min="0.7" max="1.8" step="0.1" value="1.05">
+      <span class="speed-label">Fast</span>
+    </div>
+  </div>
+
   <!-- Keyboard hint -->
   <div class="info-row">
     <kbd class="shortcut">Ctrl+Shift+F</kbd>
     <span>toggles recording &nbsp;·&nbsp;</span>
-    <kbd class="shortcut">Ctrl+Shift+U</kbd>
-    <span>toggles sphere</span>
+    <kbd class="shortcut">Ctrl+Space</kbd>
+    <span>toggles assistant</span>
   </div>
 
   <script src="popup.js"></script>

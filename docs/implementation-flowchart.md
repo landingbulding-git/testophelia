@@ -34,7 +34,7 @@ No deps    Needs Ph.1   Needs Ph.1   Needs Ph.1–3
 │  1C  Screenshot Compression / Skipping ────── 2 hours  ✅ DONE     │
 │      └─ pageKey cache, adaptive JPEG quality 50–75%                 │
 │                                                                     │
-│  1D  Persona & Language Selection ─────────── 1 hour               │
+│  1D  Persona & Language Selection ─────────── 1 hour  ✅ DONE      │
 │      └─ navigator.language → Claude, TTS rate in popup              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -105,10 +105,9 @@ return cached base64      capture new screenshot
 
 ---
 
-### 1D — Persona & Language Selection
-**Files:**
-- `src/content/assistant.js` → `_callClaude()` system prompt + `_speak()`
-- `src/popup/popup.html` + `src/popup/popup.js` → TTS rate slider
+### 1D — Persona & Language Selection ✅ DONE
+**Files:** `src/content/assistant.js` | `src/popup/popup.html` | `src/popup/popup.js`
+**Commit:** `feat: 1D language + TTS rate — navigator.language in prompt, popup slider, chrome.storage.sync`
 
 ```
 On session start:
