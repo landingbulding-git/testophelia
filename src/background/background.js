@@ -6,7 +6,34 @@ const CLAUDE_SONNET  = 'claude-sonnet-4-5';
 const CLAUDE_HAIKU   = 'claude-haiku-4-5';
 
 // ── 6A: MCP Gateway — connects to platform knowledge ─────────────────────────
-const MCP_GATEWAY = 'https://ophelia-mcp-gateway.norbertb-consulting.workers.dev';
+const MCP_GATEWAY    = 'https://ophelia-mcp-gateway.norbertb-consulting.workers.dev';
+
+// ── 7B: Sequential Thinking MCP ──────────────────────────────────────────────
+const THINKING_MCP   = 'https://ophelia-thinking-mcp.norbertb-consulting.workers.dev';
+
+const COMPLEX_KEYWORDS = ['build', 'create', 'set up', 'setup', 'configure', 'integrate',
+  'automate', 'pipeline', 'workflow', 'connect', 'implement', 'develop', 'design'];
+
+function _isComplexGoal(goal) {
+  if (!goal) return false;
+  const words = goal.trim().split(/\s+/);
+  if (words.length > 8) return true;
+  const lower = goal.toLowerCase();
+  return COMPLEX_KEYWORDS.some(k => lower.includes(k));
+}
+
+async function _callThinkingMCP(goal, platformId, context) {
+  try {
+    const res = await fetch(THINKING_MCP + '/think', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ goal, platform: platformId || '', context: context || '' }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.plan?.length ? data : null;
+  } catch (_) { return null; }
+}
 
 const MCP_REGISTRY = {
   'bubble.io':    'bubble.io',
@@ -480,6 +507,18 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
 async function _handlePlanSession({ goal, url, title, language }) {
   const lang       = language || 'en';
   const platformId = _getPlatformId(url);
+
+  // 7B: complex goals get deep sequential reasoning first
+  if (_isComplexGoal(goal)) {
+    console.log('🧠 SW plan: complex goal detected, calling thinking MCP…');
+    const thinking = await _callThinkingMCP(goal, platformId, `Page: ${title} (${url})`);
+    if (thinking?.plan?.length) {
+      console.log('💡 SW thinking plan:', thinking.plan);
+      if (thinking.caveats?.length) console.log('⚠️ Caveats:', thinking.caveats);
+      return thinking.plan;
+    }
+    console.log('🔧 SW thinking MCP failed or empty, falling back to Haiku planner');
+  }
 
   // 6C: parallel fetch — docs (search_docs for goal) + tools list from gateway
   const [platformDocs, platformToolsData] = await Promise.all([
