@@ -45,6 +45,20 @@ async function _fetchPlatformDocs(platformId, query) {
   } catch (_) { return null; }
 }
 
+async function _fetchPlatformTools(platformId) {
+  if (!platformId) return null;
+  try {
+    const res = await fetch(MCP_GATEWAY + '/list', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ platform: platformId }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.tools?.length ? data : null;
+  } catch (_) { return null; }
+}
+
 // ── 4C: Developer Knowledge — platform-specific selector hints ──────────────
 const PLATFORM_KB = {
   'facebook.com': [
@@ -467,10 +481,19 @@ async function _handlePlanSession({ goal, url, title, language }) {
   const lang       = language || 'en';
   const platformId = _getPlatformId(url);
 
-  // Fetch platform-specific docs before planning (makes plan grounded in real app knowledge)
-  const platformDocs = await _fetchPlatformDocs(platformId, goal);
-  const platformCtx  = platformDocs
+  // 6C: parallel fetch — docs (search_docs for goal) + tools list from gateway
+  const [platformDocs, platformToolsData] = await Promise.all([
+    _fetchPlatformDocs(platformId, goal),
+    _fetchPlatformTools(platformId),
+  ]);
+
+  const platformCtx = platformDocs
     ? `\n\nPLATFORM DOCUMENTATION for ${platformId}:\n${platformDocs}\n`
+    : '';
+
+  const toolsCtx = platformToolsData?.tools?.length
+    ? `\n\nAVAILABLE PLATFORM TOOLS on ${platformId} (Ophelia can call these during the session):\n` +
+      platformToolsData.tools.map(t => `\u2022 ${t.name} \u2014 ${t.description}`).join('\n') + '\n'
     : '';
 
   const res = await fetch(CLAUDE_WORKER, {
@@ -480,11 +503,12 @@ async function _handlePlanSession({ goal, url, title, language }) {
       model:      CLAUDE_HAIKU,
       max_tokens: 300,
       system:
-        `You are a browser task planner. Given a goal, the current page, and any available platform documentation, output a concise ordered list of browser actions needed to complete the goal.\n` +
-        `Use the platform documentation to name UI elements and steps precisely.\n` +
+        `You are a browser task planner. Given a goal, the current page, platform documentation, and the list of tools Ophelia can invoke, output a concise ordered list of browser actions needed to complete the goal.\n` +
+        `Use the platform documentation and tool names to name UI elements and steps precisely.\n` +
         `Reply ONLY with a JSON array of short action strings \u2014 no prose, no markdown:\n` +
         `["Click the Workflow tab in the left sidebar", "Click + Add an action", ...]` +
-        platformCtx,
+        platformCtx +
+        toolsCtx,
       messages: [{ role: 'user', content: `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}` }]
     })
   });
