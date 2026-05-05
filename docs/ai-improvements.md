@@ -152,7 +152,9 @@ This adds one small Claude call but prevents Claude from giving impossible steps
 
 ---
 
-## Prompt Improvements
+## Prompt Improvements ✅ IMPLEMENTED
+
+> Rules 5–8 added to `_callClaude()` system prompt in `src/content/assistant.js`.
 
 ### Current system prompt weaknesses
 1. **No recovery instruction** — when Claude can't find an element, it often hallucinates a different one instead of admitting failure

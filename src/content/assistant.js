@@ -416,7 +416,11 @@ window.OpheliaAssistant = (() => {
             `1. One action per response. Never combine multiple actions.\n` +
             `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
             `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
-            `4. Instructions: short, plain English, max 12 words.\n\n` +
+            `4. Instructions: short, plain English, max 12 words.\n` +
+            `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
+            `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
+            `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
+            `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n\n` +
             `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
             `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
             `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`,

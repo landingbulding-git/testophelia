@@ -25,7 +25,7 @@ No deps    Needs Ph.1   Needs Ph.1   Needs Ph.1–3
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE 1                                                            │
 │                                                                     │
-│  1A  Prompt Improvements ──────────────────── 1 hour               │
+│  1A  Prompt Improvements ──────────────────── 1 hour  ✅ DONE       │
 │      └─ scroll hint, wait hint, recovery rule, no-hallucinate rule  │
 │                                                                     │
 │  1B  Goal Clarification Turn ──────────────── 2 hours              │
@@ -39,8 +39,9 @@ No deps    Needs Ph.1   Needs Ph.1   Needs Ph.1–3
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 1A — Prompt Improvements
+### 1A — Prompt Improvements ✅ DONE
 **File:** `src/content/assistant.js` → `_callClaude()` system prompt string
+**Commit:** `feat: 1A prompt improvements — scroll, wait, recovery, no-hallucinate rules`
 
 Add 4 rules to the existing system prompt:
 ```
