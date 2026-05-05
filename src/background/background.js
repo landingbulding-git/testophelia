@@ -5,6 +5,46 @@ const CLAUDE_WORKER   = 'https://ophelia-gemini-worker.norbertb-consulting.worke
 const MIN_CALL_GAP_MS = 2000; // min ms between main analyze calls
 let   _swLastCallAt   = 0;
 
+// ── 6A: MCP Gateway — connects to platform knowledge ─────────────────────────
+const MCP_GATEWAY = 'https://ophelia-mcp-gateway.norbertb-consulting.workers.dev';
+
+const MCP_REGISTRY = {
+  'bubble.io':    'bubble.io',
+  'zoho.com':     'zoho.com',
+  'notion.com':   'notion.com',
+  'suno.com':     'suno.com',
+  'webflow.com':  'webflow.com',
+  'airtable.com': 'airtable.com',
+  'linear.app':   'linear.app',
+  'github.com':   'github.com',
+  'mailchimp.com':'mailchimp.com',
+  'canva.com':    'canva.com',
+};
+
+function _getPlatformId(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    for (const [domain, id] of Object.entries(MCP_REGISTRY)) {
+      if (host === domain || host.endsWith('.' + domain)) return id;
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _fetchPlatformDocs(platformId, query) {
+  if (!platformId) return null;
+  try {
+    const res = await fetch(MCP_GATEWAY + '/call', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ platform: platformId, tool: 'search_docs', input: { query } }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.result || null;
+  } catch (_) { return null; }
+}
+
 // ── 4C: Developer Knowledge — platform-specific selector hints ──────────────
 const PLATFORM_KB = {
   'facebook.com': [
@@ -317,6 +357,7 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
   // ── Tool path: fast path had no element — retry with tools ──────────────────
   console.log('\uD83D\uDD27 SW analyze: no element in stream, trying tool-use\u2026');
 
+  const platformId = _getPlatformId(pageUrl);
   const tools = [
     {
       name: 'get_accessibility_tree',
@@ -332,6 +373,20 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
           hint: { type: 'string', description: 'The element to inspect \u2014 its aria_label, visible text, or role' }
         },
         required: ['hint']
+      }
+    },
+    {
+      name: 'call_platform_tool',
+      description: platformId
+        ? `Call the ${platformId} MCP to get real documentation, UI terminology, or step-by-step guidance specific to this platform. Use search_docs to look up how features work.`
+        : 'Call the current platform\'s MCP to get documentation or platform-specific guidance.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          tool:  { type: 'string', description: 'Tool name — use "search_docs" to search platform documentation' },
+          input: { type: 'object', description: 'Tool input, e.g. {"query": "how to create a workflow"}' }
+        },
+        required: ['tool', 'input']
       }
     }
   ];
@@ -363,7 +418,14 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
       messages.push({ role: 'assistant', content: data.content });
       let toolResult = 'Error: tool could not execute';
 
-      if (toolBlock.name === 'get_accessibility_tree' && tabId) {
+      if (toolBlock.name === 'call_platform_tool') {
+        if (platformId) {
+          toolResult = await _fetchPlatformDocs(platformId, toolBlock.input?.input?.query || toolBlock.input?.tool) || 'No documentation found.';
+          console.log('\uD83C\uDF10 SW tool call_platform_tool:', toolResult.substring(0, 200));
+        } else {
+          toolResult = 'No platform MCP registered for this page.';
+        }
+      } else if (toolBlock.name === 'get_accessibility_tree' && tabId) {
         toolResult = await new Promise(resolve => {
           chrome.tabs.sendMessage(tabId, { action: 'getAriaTree' }, result => {
             resolve(chrome.runtime.lastError
@@ -404,7 +466,15 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
 }
 
 async function _handlePlanSession({ goal, url, title, language }) {
-  const lang = language || 'en';
+  const lang       = language || 'en';
+  const platformId = _getPlatformId(url);
+
+  // Fetch platform-specific docs before planning (makes plan grounded in real app knowledge)
+  const platformDocs = await _fetchPlatformDocs(platformId, goal);
+  const platformCtx  = platformDocs
+    ? `\n\nPLATFORM DOCUMENTATION for ${platformId}:\n${platformDocs}\n`
+    : '';
+
   const now = Date.now();
   const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
   if (gap > 0) await new Promise(r => setTimeout(r, gap));
@@ -417,9 +487,11 @@ async function _handlePlanSession({ goal, url, title, language }) {
       model:      'claude-sonnet-4-5',
       max_tokens: 300,
       system:
-        `You are a browser task planner. Given a goal and the current page, output a concise ordered list of browser actions needed to complete it.\n` +
+        `You are a browser task planner. Given a goal, the current page, and any available platform documentation, output a concise ordered list of browser actions needed to complete the goal.\n` +
+        `Use the platform documentation to name UI elements and steps precisely.\n` +
         `Reply ONLY with a JSON array of short action strings \u2014 no prose, no markdown:\n` +
-        `["Click the Sign Up button", "Enter your email address", ...]`,
+        `["Click the Workflow tab in the left sidebar", "Click + Add an action", ...]` +
+        platformCtx,
       messages: [{ role: 'user', content: `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}` }]
     })
   });
@@ -430,7 +502,7 @@ async function _handlePlanSession({ goal, url, title, language }) {
   if (!match) return [];
   try {
     const plan = JSON.parse(match[0]);
-    console.log('\uD83D\uDCCB SW plan:', plan);
+    console.log('\uD83D\uDCCB SW plan (platform:', platformId || 'none', '):', plan);
     return Array.isArray(plan) ? plan : [];
   } catch (_) { return []; }
 }
