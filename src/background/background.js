@@ -326,17 +326,18 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
     `YOUR ONLY JOB: identify the single next action the user must take to reach their goal.\n\n` +
     `RULES:\n` +
     `1. One action per response. Never combine multiple actions.\n` +
-    `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
-    `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
+    `2. Always pick elementIndex from the DOM list shown below. The number in [brackets] is the index.\n` +
+    `3. If the right element is not visible yet (menu not open, dialog not shown): set elementIndex null and instruct the user to open it first.\n` +
     `4. Instructions: short, plain English, max 12 words.\n` +
     `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
     `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
-    `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
-    `8. Never invent element attributes not present in the DOM list \u2014 use only what appears verbatim.\n` +
+    `7. If no element is needed (e.g. wait, scroll, or goal is done): set elementIndex to null.\n` +
+    `8. Pick elementIndex from the [N] number shown in the DOM list. Never invent a number not in the list.\n` +
     `Language: respond in "${lang}" \u2014 translate instructions naturally if not English.\n\n` +
     `RESPOND WITH ONLY VALID JSON \u2014 no prose, no markdown fences:\n` +
-    `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
-    `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}` +
+    `{"instruction":"short action","elementIndex":3,"done":false}\n` +
+    `elementIndex must be the [N] index from the DOM list, or null if no element to click.\n` +
+    `When the goal is fully achieved: {"instruction":"All done!","done":true,"elementIndex":null}` +
     planCtx +
     platformCtx +
     (stepFailed

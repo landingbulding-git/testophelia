@@ -23,6 +23,9 @@ window.OpheliaAssistant = (() => {
   let _preClickSnapshot = null;  // DOM snapshot captured just before the user clicks
   let _lastStepFailed   = false; // true when DOM didn't change after last click
 
+  // ── Element refs (index-based matching) ──────────────────────────────────
+  let _scannedRefs = []; // real DOM element refs from last _scanPage() call
+
   // ── Screenshot cache ─────────────────────────────────────────────────
   let _lastPageKey    = '';   // "href|scrollBucket" of last capture
   let _lastScreenshot = null; // base64 of last capture (reused on cache hit)
@@ -309,19 +312,17 @@ window.OpheliaAssistant = (() => {
     }
 
     // 5b. Show next step
-    const el = step.element ? await _findEl(step.element, screenshot) : null;
+    const el = await _resolveEl(step, screenshot);
 
-    if (!el && step.element && _retries < 2) {
-      // Element described but not found — push feedback to Claude and retry silently
-      const attrs = JSON.stringify(step.element);
+    if (!el && typeof step.elementIndex === 'number' && _retries < 2) {
       _messages.push({
         role: 'user',
         content: [{ type: 'text', text:
-          `The element ${attrs} was not found in the DOM. ` +
-          `Re-examine the screenshot and DOM list and provide a different descriptor or a different instruction.`
+          `Element at index ${step.elementIndex} was not found (the DOM may have changed). ` +
+          `Re-examine the screenshot and DOM list and choose a different elementIndex or set elementIndex to null.`
         }]
       });
-      console.warn(`⚠️ _findEl failed (retry ${_retries + 1}/2), feeding back to Claude`);
+      console.warn(`⚠️ _resolveEl failed (retry ${_retries + 1}/2)`);
       setTimeout(() => { if (_active) _analyze('Element not found, re-examining.', _retries + 1); }, 1200);
       return;
     }
@@ -479,6 +480,7 @@ window.OpheliaAssistant = (() => {
     const vw = window.innerWidth, vh = window.innerHeight;
     const elements = [];
     const seen = new Set();
+    _scannedRefs = []; // reset refs for this scan
 
     document.querySelectorAll(SEL).forEach(el => {
       const r  = el.getBoundingClientRect();
@@ -508,6 +510,7 @@ window.OpheliaAssistant = (() => {
       const vR = cy < 0      ? 'above'  : cy < vh / 3      ? 'top'     :
                  cy < 2*vh/3 ? 'mid'    : cy < vh           ? 'bottom'  : 'below';
 
+      _scannedRefs.push(el); // store real ref at this index
       elements.push({
         tag:          el.tagName.toLowerCase(),
         role:         el.getAttribute('role') || el.computedRole || null,
@@ -571,129 +574,45 @@ window.OpheliaAssistant = (() => {
     });
   }
 
-  // ── Element finder — 5-tier multi-modal search (3B) ──────────────────────
-  // Tier 1: confidence scoring on main document (from 2A)
-  // Tier 3: shadow DOM pierce
-  // Tier 4: iframe pierce
-  // Tier 5: Claude coordinate fallback (screenshot → {x,y} → elementFromPoint)
+  // ── Element resolver — index-based direct lookup + coord fallback ─────────────
 
-  async function _findEl(d, screenshot) {
-    if (!d) return null;
+  async function _resolveEl(step, screenshot) {
+    const i = step.elementIndex;
 
-    const nAria = (d.aria_label   || '').trim().toLowerCase();
-    const nText = (d.text_content || '').trim().toLowerCase();
-    const nTid  = (d.data_testid  || '').trim().toLowerCase();
-    const nTag  = (d.tag          || '').trim().toLowerCase();
-    const label = nAria || nText || nTid || '?';
-
-    if (!nAria && !nText && !nTid) return null;
-
-    const SEL = [
-      'button', 'a[href]', 'input', 'select', 'textarea',
-      '[role="button"]', '[role="link"]', '[role="menuitem"]',
-      '[role="option"]', '[role="tab"]', '[role="checkbox"]',
-      '[role="switch"]', '[role="radio"]', '[aria-label]', '[data-testid]'
-    ].join(',');
-
-    const vw = window.innerWidth, vh = window.innerHeight;
-
-    // Shared scorer — returns numeric score for a single element (-Infinity if hidden)
-    function _score(el) {
-      const r  = el.getBoundingClientRect();
-      const cs = window.getComputedStyle(el);
-      if (cs.display === 'none' || cs.visibility === 'hidden') return -Infinity;
-      if (parseFloat(cs.opacity) === 0)                        return -Infinity;
-
-      let s = 0;
-      const eAria = (el.getAttribute('aria-label')  || '').trim().toLowerCase();
-      const eTid  = (el.getAttribute('data-testid') || '').trim().toLowerCase();
-      const eText = (el.textContent || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80);
-      const eTag  = el.tagName.toLowerCase();
-
-      if (nAria && eAria) {
-        if (eAria === nAria)                                      s += 100;
-        else if (eAria.includes(nAria) || nAria.includes(eAria)) s +=  90;
+    // Primary: direct ref by index — O(1), no matching
+    if (typeof i === 'number' && _scannedRefs[i]) {
+      const el = _scannedRefs[i];
+      if (document.contains(el)) {
+        console.log(`✅ _resolveEl: direct ref #${i}`);
+        return el;
       }
-      if (nTid && eTid && eTid === nTid)                          s +=  80;
-      if (nText && eText) {
-        if (eText === nText)                                       s +=  70;
-        else if (eText.includes(nText) || nText.includes(eText))  s +=  50;
-      }
-      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-      if (cx >= 0 && cx <= vw && cy >= 0 && cy <= vh)             s +=  20;
-      if (nTag && eTag === nTag)                                   s +=  10;
-      if (r.width < 10 || r.height < 10)                          s -=  30;
-      return s;
+      console.warn(`⚠️ _resolveEl: ref #${i} stale (React re-render?), trying coord fallback`);
     }
 
-    // Pick best-scoring element from a NodeList/Array, threshold > 50
-    function _bestIn(list) {
-      let best = null, bestScore = 0;
-      list.forEach(el => {
-        const s = _score(el);
-        if (s > bestScore) { bestScore = s; best = el; }
-      });
-      return bestScore > 50 ? best : null;
-    }
-
-    // ── Tier 1: main document ──────────────────────────────────────────────
-    let result = _bestIn(document.querySelectorAll(SEL));
-    if (result) {
-      console.log(`🔍 _findEl T1 hit for "${label}"`);
-      return result;
-    }
-
-    // ── Tier 3: shadow DOM pierce ──────────────────────────────────────────
-    try {
-      const shadowCandidates = [];
-      document.querySelectorAll('*').forEach(host => {
-        if (!host.shadowRoot) return;
-        try { shadowCandidates.push(...host.shadowRoot.querySelectorAll(SEL)); } catch (_) {}
-      });
-      result = _bestIn(shadowCandidates);
-      if (result) {
-        console.log(`🔍 _findEl T3 (shadow) hit for "${label}"`);
-        return result;
-      }
-    } catch (_) {}
-
-    // ── Tier 4: iframe pierce ──────────────────────────────────────────────
-    try {
-      const iframeCandidates = [];
-      document.querySelectorAll('iframe').forEach(frame => {
-        try {
-          const doc = frame.contentDocument;
-          if (doc) iframeCandidates.push(...doc.querySelectorAll(SEL));
-        } catch (_) {}
-      });
-      result = _bestIn(iframeCandidates);
-      if (result) {
-        console.log(`🔍 _findEl T4 (iframe) hit for "${label}"`);
-        return result;
-      }
-    } catch (_) {}
-
-    // ── Tier 5: Claude coordinate fallback (via SW) ───────────────────────
+    // Fallback: coord lookup via screenshot (Haiku looks at screenshot and returns x,y)
     if (screenshot) {
-      try {
-        const coords = await new Promise(resolve => {
-          chrome.runtime.sendMessage({ action: 'coordLookup', screenshot, label }, result => {
-            resolve(chrome.runtime.lastError ? null : result);
+      const label = step.instruction || (typeof i === 'number' ? `element #${i}` : null);
+      if (label) {
+        try {
+          const coords = await new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: 'coordLookup', screenshot, label }, res => {
+              resolve(chrome.runtime.lastError ? null : res);
+            });
           });
-        });
-        if (coords) {
-          const dpr  = window.devicePixelRatio || 1;
-          const cssX = Math.round(coords.x / dpr), cssY = Math.round(coords.y / dpr);
-          const hit  = document.elementFromPoint(cssX, cssY);
-          if (hit && hit !== document.body && hit !== document.documentElement) {
-            console.log(`🔍 _findEl T5 (coord) hit at CSS ${cssX},${cssY} for "${label}"`);
-            return hit;
+          if (coords) {
+            const dpr  = window.devicePixelRatio || 1;
+            const cssX = Math.round(coords.x / dpr), cssY = Math.round(coords.y / dpr);
+            const hit  = document.elementFromPoint(cssX, cssY);
+            if (hit && hit !== document.body && hit !== document.documentElement) {
+              console.log(`✅ _resolveEl: coord fallback at CSS ${cssX},${cssY}`);
+              return hit;
+            }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
 
-    console.log(`🔍 _findEl all tiers failed for "${label}"`);
+    console.log(`❌ _resolveEl: no element found (index=${i})`);
     return null;
   }
 
