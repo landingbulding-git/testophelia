@@ -16,8 +16,9 @@ window.OpheliaAssistant = (() => {
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
   let _ttsRate        = 1.05; // loaded from chrome.storage.sync on session start
-  let _pendingResume  = null;  // {goal, stepCount} waiting for Ctrl+Space confirmation
-  let _resumeTimer    = null;  // auto-discard timeout
+  let _pendingResume      = null;  // {goal, stepCount} waiting for Ctrl+Space confirmation
+  let _resumeTimer        = null;  // auto-discard timeout
+  let _checkObstacleNext  = true;  // run obstacle check on first step and after each navigation
 
   // ── Screenshot cache ─────────────────────────────────────────────────
   let _lastPageKey    = '';   // "href|scrollBucket" of last capture
@@ -255,6 +256,7 @@ window.OpheliaAssistant = (() => {
     _active = true;
     _stepCount = 0;
     _lastPageKey = ''; _lastScreenshot = null; _stepsSinceNav = 0;
+    _checkObstacleNext = true;
 
     // Load persisted TTS rate preference
     try {
@@ -278,6 +280,20 @@ window.OpheliaAssistant = (() => {
 
     // 1. Take screenshot (visual context)
     const screenshot = await _captureScreen();
+
+    // 1.5 Obstacle check (first step + after navigation only — lightweight, no DOM)
+    if (_checkObstacleNext) {
+      _checkObstacleNext = false;
+      if (screenshot) {
+        const obs = await _checkObstacle(screenshot);
+        if (obs) {
+          _speak(obs.action);
+          _setDotLabel(`⚠️ ${obs.action}`);
+          _waitingForAction = true;
+          return; // user dismisses obstacle → next click re-triggers _analyze
+        }
+      }
+    }
 
     // 2. Scan DOM
     const dom   = _scanPage();
@@ -389,6 +405,7 @@ window.OpheliaAssistant = (() => {
       if (!_active) { clearInterval(navPoll); return; }
       if (location.href !== lastUrl) {
         lastUrl = location.href;
+        _checkObstacleNext = true; // new page may have cookie banner / modal
         _setDotLabel('Page changed…');
         reanalyze('User navigated to a new page. What is the next step toward the goal?');
       }
@@ -507,6 +524,41 @@ window.OpheliaAssistant = (() => {
     });
 
     return { url: location.href, title: document.title, elements: elements.slice(0, 40) };
+  }
+
+  // ── Obstacle detector (lightweight pre-flight, no DOM, only on first step / nav) ─────
+
+  async function _checkObstacle(screenshot) {
+    try {
+      const res = await fetch(CLAUDE_WORKER, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model:      'claude-sonnet-4-5',
+          max_tokens: 60,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
+              { type: 'text',  text:
+                'Does this screenshot show a modal, cookie consent banner, login wall, or blocking overlay ' +
+                'that prevents interaction with the main content? ' +
+                'Reply ONLY with valid JSON — no prose:\n' +
+                '{"obstacle":true,"action":"close the cookie banner"} or {"obstacle":false}'
+              }
+            ]
+          }]
+        })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const raw  = data.content?.[0]?.text || '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+      const parsed = JSON.parse(match[0]);
+      console.log('🚧 Obstacle check:', parsed);
+      return parsed.obstacle ? parsed : null;
+    } catch (_) { return null; }
   }
 
   // ── Claude call (multi-turn) ────────────────────────────────────────────────

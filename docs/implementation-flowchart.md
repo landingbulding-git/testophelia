@@ -240,7 +240,7 @@ On stop():
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE 3                          (requires Phase 1 complete)       │
 │                                                                     │
-│  3A  Proactive Obstacle Detection ─────────── 3 hours              │
+│  3A  Proactive Obstacle Detection ─────────── 3 hours  ✅ DONE     │
 │      └─ pre-check Claude call, cookie banners, modals, login walls  │
 │                                                                     │
 │  3B  Multi-Modal Element Search ───────────── 5 hours              │
@@ -248,8 +248,9 @@ On stop():
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3A — Proactive Obstacle Detection
-**File:** `src/content/assistant.js` → new `_checkObstacle(screenshot)` called before `_callClaude()`
+### 3A — Proactive Obstacle Detection ✅ DONE
+**File:** `src/content/assistant.js` → `_checkObstacle()` + `_checkObstacleNext` flag
+**Commit:** `feat: 3A obstacle detection — lightweight Claude pre-flight on session start and nav`
 
 ```
 _analyze()

@@ -108,7 +108,9 @@ if (pageKey === _lastPageKey) screenshot = null; // reuse previous
 
 ---
 
-## 5. Proactive Obstacle Detection
+## 5. Proactive Obstacle Detection ✅ IMPLEMENTED
+
+> `_checkObstacle(screenshot)` added to `src/content/assistant.js`. Runs a lightweight Claude call (`max_tokens: 60`, no DOM) before `_callClaude()` on session start and after every URL change (`_checkObstacleNext` flag). If obstacle detected, speaks the action and waits for user to dismiss before continuing.
 
 **Problem:** Claude sometimes gives a step for an element that's behind a modal, login wall, or cookie banner.
 
