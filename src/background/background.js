@@ -1,9 +1,9 @@
 // Ophelia Background Service Worker
 
 // ── Claude proxy (4A: agent logic lives here, not in content script) ─────────
-const CLAUDE_WORKER   = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
-const MIN_CALL_GAP_MS = 2000; // min ms between main analyze calls
-let   _swLastCallAt   = 0;
+const CLAUDE_WORKER  = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
+const CLAUDE_SONNET  = 'claude-sonnet-4-5';
+const CLAUDE_HAIKU   = 'claude-haiku-4-5';
 
 // ── 6A: MCP Gateway — connects to platform knowledge ─────────────────────────
 const MCP_GATEWAY = 'https://ophelia-mcp-gateway.norbertb-consulting.workers.dev';
@@ -220,12 +220,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ── SW-side Claude helpers (4A) ──────────────────────────────────────────────
 
 async function _swRawText({ max_tokens, system, messages, stream }) {
-  const now = Date.now();
-  const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
-  if (gap > 0) await new Promise(r => setTimeout(r, gap));
-  _swLastCallAt = Date.now();
-
-  const body = { model: 'claude-sonnet-4-5', max_tokens, messages };
+  const body = { model: CLAUDE_SONNET, max_tokens, messages };
   if (system) body.system = system;
   if (stream) body.stream = true;
 
@@ -295,15 +290,10 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
 
   // ── Fast path: streaming, no tools — TTS fires on first token ───────────────
   {
-    const now = Date.now();
-    const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
-    if (gap > 0) await new Promise(r => setTimeout(r, gap));
-    _swLastCallAt = Date.now();
-
     const res = await fetch(CLAUDE_WORKER, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 400, system, messages: apiMessages, stream: true })
+      body: JSON.stringify({ model: CLAUDE_SONNET, max_tokens: 400, system, messages: apiMessages, stream: true })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -395,15 +385,10 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
   const MAX_ROUNDS  = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const now = Date.now();
-    const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
-    if (gap > 0) await new Promise(r => setTimeout(r, gap));
-    _swLastCallAt = Date.now();
-
     const res = await fetch(CLAUDE_WORKER, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 400, system, tools, messages })
+      body: JSON.stringify({ model: CLAUDE_SONNET, max_tokens: 400, system, tools, messages })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -475,16 +460,11 @@ async function _handlePlanSession({ goal, url, title, language }) {
     ? `\n\nPLATFORM DOCUMENTATION for ${platformId}:\n${platformDocs}\n`
     : '';
 
-  const now = Date.now();
-  const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
-  if (gap > 0) await new Promise(r => setTimeout(r, gap));
-  _swLastCallAt = Date.now();
-
   const res = await fetch(CLAUDE_WORKER, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model:      'claude-sonnet-4-5',
+      model:      CLAUDE_HAIKU,
       max_tokens: 300,
       system:
         `You are a browser task planner. Given a goal, the current page, and any available platform documentation, output a concise ordered list of browser actions needed to complete the goal.\n` +
@@ -512,7 +492,7 @@ async function _handleCheckObstacle({ screenshot }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: CLAUDE_HAIKU,
       max_tokens: 60,
       messages: [{
         role: 'user',
@@ -543,7 +523,7 @@ async function _handleClarifyGoal({ goal }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: CLAUDE_HAIKU,
       max_tokens: 120,
       system:
         `You assess whether a user's goal is specific enough to guide step by step in a browser.\n` +
@@ -566,7 +546,7 @@ async function _handleCoordLookup({ screenshot, label }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: CLAUDE_HAIKU,
       max_tokens: 30,
       messages: [{
         role: 'user',
