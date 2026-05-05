@@ -330,7 +330,7 @@ Tier 5: Coordinate fallback (screenshot crop)
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE 4                          (requires Phase 1–3 complete)     │
 │                                                                     │
-│  4A  Service Worker Agent Core ────────────── 3 days               │
+│  4A  Service Worker Agent Core ──────────── 3 days   ✅ DONE     │
 │      └─ move _callClaude, _scanPage, _formatElements to SW          │
 │                                                                     │
 │  4B  MCP Server (Basic Tools) ─────────────── 3 days               │
@@ -341,10 +341,9 @@ Tier 5: Coordinate fallback (screenshot crop)
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4A — Service Worker Agent Core
-**Files:**
-- `src/background/background.js` → add `analyze` message handler
-- `src/content/assistant.js` → replace `_callClaude()` with `sendMessage({action:'analyze', ...})`
+### 4A — Service Worker Agent Core ✅ DONE
+**Files:** `src/background/background.js` | `src/content/assistant.js`
+**Commit:** `feat: 4A service worker agent core — all Claude calls offloaded to SW via sendMessage`
 
 ```
 BEFORE:                           AFTER:

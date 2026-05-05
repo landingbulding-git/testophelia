@@ -2,11 +2,8 @@
 // Ctrl+Shift+U → goal dialog → screenshot + DOM → Claude → next step → highlight → wait → repeat
 // Multi-turn conversation: Claude remembers what's been done and adapts to page changes.
 window.OpheliaAssistant = (() => {
-  const CLAUDE_WORKER = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
   // 4 messages = 2 full turns. Images stripped from all but latest → ~$0.005-0.008/step.
-  const MAX_HISTORY     = 4;
-  const MIN_CALL_GAP_MS = 2000; // minimum ms between consecutive Claude calls
-  let   _lastCallAt     = 0;
+  const MAX_HISTORY = 4;
 
   let _goal      = '';
   let _messages  = []; // multi-turn conversation history
@@ -187,65 +184,20 @@ window.OpheliaAssistant = (() => {
 
   async function _clarifyGoal(goal) {
     _setDotLabel('Thinking…');
-    try {
-      const res = await fetch(CLAUDE_WORKER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model:      'claude-sonnet-4-5',
-          max_tokens: 120,
-          system:
-            `You assess whether a user's goal is specific enough to guide step by step in a browser.\n` +
-            `Reply ONLY with valid JSON — no prose:\n` +
-            `{"clear":true}  — goal is actionable and specific.\n` +
-            `{"clear":false,"question":"..."}  — too vague; one short clarifying question, max 12 words.`,
-          messages: [{ role: 'user', content: `Goal: "${goal}"` }]
-        })
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage({ action: 'clarifyGoal', goal }, result => {
+        if (chrome.runtime.lastError || !result) {
+          console.warn('⚠️ _clarifyGoal SW error, proceeding directly');
+          resolve({ clear: true });
+        } else {
+          resolve(result);
+        }
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data  = await res.json();
-      const raw   = data.content?.[0]?.text || '';
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('No JSON');
-      return JSON.parse(match[0]);
-    } catch (e) {
-      console.warn('⚠️ _clarifyGoal failed, proceeding directly:', e);
-      return { clear: true }; // fail open — never block the session
-    }
+    });
   }
 
   function _listenForMessage() {
     _startMic((text) => _userMessage(text));
-  }
-
-  function _showTextFallback(callback) {
-    const isGoal = !_active;
-    const wrap = document.createElement('div');
-    wrap.id = 'ophelia-fallback';
-    wrap.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
-      'z-index:2147483647;display:flex;gap:7px;align-items:center;' +
-      'background:rgba(9,9,13,0.95);border:1px solid rgba(255,122,26,0.4);' +
-      'border-radius:12px;padding:10px 14px;' +
-      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
-      'box-shadow:0 8px 28px rgba(0,0,0,0.6)';
-    wrap.innerHTML =
-      `<input id="ophelia-fb-input" type="text" placeholder="${isGoal ? 'What do you want to accomplish?' : 'Say something to Ophelia…'}"` +
-      ' style="background:none;border:none;outline:none;color:#fff;font-size:13px;' +
-      'font-family:inherit;width:300px"/>' +
-      '<button id="ophelia-fb-go" style="background:#ff7a1a;border:none;border-radius:7px;' +
-      'padding:6px 14px;cursor:pointer;color:#fff;font-size:13px;font-weight:600;' +
-      'font-family:inherit">→</button>';
-    document.body.appendChild(wrap);
-    const inp = wrap.querySelector('#ophelia-fb-input');
-    inp.focus();
-    const go = () => {
-      const text = inp.value.trim();
-      if (!text) return;
-      wrap.remove();
-      if (callback) callback(text);
-    };
-    wrap.querySelector('#ophelia-fb-go').addEventListener('click', go);
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') wrap.remove(); });
   }
 
   // ── Session start ───────────────────────────────────────────────────────────
@@ -526,151 +478,48 @@ window.OpheliaAssistant = (() => {
     return { url: location.href, title: document.title, elements: elements.slice(0, 40) };
   }
 
-  // ── Obstacle detector (lightweight pre-flight, no DOM, only on first step / nav) ─────
+  // ── Obstacle detector (pre-flight, now handled by SW) ──────────────────────
 
   async function _checkObstacle(screenshot) {
-    try {
-      const res = await fetch(CLAUDE_WORKER, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model:      'claude-sonnet-4-5',
-          max_tokens: 60,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
-              { type: 'text',  text:
-                'Does this screenshot show a modal, cookie consent banner, login wall, or blocking overlay ' +
-                'that prevents interaction with the main content? ' +
-                'Reply ONLY with valid JSON — no prose:\n' +
-                '{"obstacle":true,"action":"close the cookie banner"} or {"obstacle":false}'
-              }
-            ]
-          }]
-        })
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage({ action: 'checkObstacle', screenshot }, result => {
+        resolve(chrome.runtime.lastError ? null : (result || null));
       });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const raw  = data.content?.[0]?.text || '';
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      const parsed = JSON.parse(match[0]);
-      console.log('🚧 Obstacle check:', parsed);
-      return parsed.obstacle ? parsed : null;
-    } catch (_) { return null; }
+    });
   }
 
-  // ── Claude call (multi-turn) ────────────────────────────────────────────────
+  // ── Claude call (4A: delegates to SW via sendMessage) ──────────────────────
 
   async function _callClaude() {
-    // Enforce minimum gap between calls to stay under token-per-minute rate limit
-    const now = Date.now();
-    const gap = MIN_CALL_GAP_MS - (now - _lastCallAt);
-    if (gap > 0) await new Promise(r => setTimeout(r, gap));
-    _lastCallAt = Date.now();
-
-    try {
-      // Build messages for API — strip images from all turns except the last user turn
-      const apiMessages = _messages.map((m, i) => {
-        const isLastUser = m.role === 'user' && i === _messages.length - 1;
-        if (!isLastUser && Array.isArray(m.content)) {
-          // Replace image blocks with a short text note to save tokens
-          const textParts = m.content.filter(c => c.type === 'text');
-          const hadImage  = m.content.some(c => c.type === 'image');
-          return {
-            role: m.role,
-            content: hadImage
-              ? [{ type: 'text', text: '[screenshot from previous step]' }, ...textParts]
-              : textParts
-          };
-        }
-        return { role: m.role, content: m.content };
-      });
-
-      const systemPrompt =
-        `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
-        `After every user action you receive a new screenshot and DOM state.\n\n` +
-        `YOUR ONLY JOB: identify the single next action the user must take to reach their goal.\n\n` +
-        `RULES:\n` +
-        `1. One action per response. Never combine multiple actions.\n` +
-        `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
-        `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
-        `4. Instructions: short, plain English, max 12 words.\n` +
-        `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
-        `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
-        `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
-        `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n` +
-        `Language: respond in "${navigator.language || 'en'}" — translate instructions naturally if not English.\n\n` +
-        `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
-        `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
-        `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`;
-
-      const res = await fetch(CLAUDE_WORKER, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model:      'claude-sonnet-4-5',
-          max_tokens: 400,
-          stream:     true,
-          system:     systemPrompt,
-          messages:   apiMessages
-        })
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error('❌ Claude error:', JSON.stringify(err));
-        return null;
+    // Strip images from older turns before sending to SW (keeps IPC payload small)
+    const apiMessages = _messages.map((m, i) => {
+      const isLastUser = m.role === 'user' && i === _messages.length - 1;
+      if (!isLastUser && Array.isArray(m.content)) {
+        const textParts = m.content.filter(c => c.type === 'text');
+        const hadImage  = m.content.some(c => c.type === 'image');
+        return {
+          role: m.role,
+          content: hadImage
+            ? [{ type: 'text', text: '[screenshot from previous step]' }, ...textParts]
+            : textParts
+        };
       }
+      return { role: m.role, content: m.content };
+    });
 
-      // ── SSE stream reader ──────────────────────────────────────────────────
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulated        = '';
-      let instructionSpoken  = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        // Parse SSE lines from this chunk
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6).trim();
-          if (payload === '[DONE]') continue;
-          try {
-            const evt = JSON.parse(payload);
-            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
-              accumulated += evt.delta.text;
-            }
-          } catch (_) {}
-        }
-
-        // Speak instruction as soon as its closing quote appears in the stream
-        if (!instructionSpoken) {
-          const instMatch = accumulated.match(/"instruction"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
-          if (instMatch) {
-            const instr = instMatch[1].replace(/\\"/g, '"').replace(/\\n/g, ' ');
-            _speak(instr);
-            instructionSpoken = true;
-            console.log('🔊 Streaming TTS fired early:', instr);
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage(
+        { action: 'analyze', apiMessages, language: navigator.language || 'en' },
+        step => {
+          if (chrome.runtime.lastError) {
+            console.error('\u274c SW analyze error:', chrome.runtime.lastError.message);
+            resolve(null);
+          } else {
+            resolve(step || null);
           }
         }
-      }
-
-      console.log('🧠 Claude (stream):', accumulated.substring(0, 300));
-      const match = accumulated.match(/\{[\s\S]*\}/);
-      if (!match) { console.error('No JSON in Claude stream'); return null; }
-      const parsed = JSON.parse(match[0]);
-      parsed._raw              = accumulated;
-      parsed._instructionSpoken = instructionSpoken;
-      return parsed;
-    } catch (e) {
-      console.error('❌ _callClaude failed:', e);
-      return null;
-    }
+      );
+    });
   }
 
   // ── Element finder — 5-tier multi-modal search (3B) ──────────────────────
@@ -775,41 +624,21 @@ window.OpheliaAssistant = (() => {
       }
     } catch (_) {}
 
-    // ── Tier 5: Claude coordinate fallback ────────────────────────────────
+    // ── Tier 5: Claude coordinate fallback (via SW) ───────────────────────
     if (screenshot) {
       try {
-        const res = await fetch(CLAUDE_WORKER, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model:      'claude-sonnet-4-5',
-            max_tokens: 30,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
-                { type: 'text', text:
-                  `Point to the element described as: "${label}".\n` +
-                  `Reply ONLY with valid JSON — no prose: {"x":N,"y":N}\n` +
-                  `x and y are pixel coordinates in the screenshot (top-left = 0,0).`
-                }
-              ]
-            }]
-          })
+        const coords = await new Promise(resolve => {
+          chrome.runtime.sendMessage({ action: 'coordLookup', screenshot, label }, result => {
+            resolve(chrome.runtime.lastError ? null : result);
+          });
         });
-        if (res.ok) {
-          const data  = await res.json();
-          const raw   = data.content?.[0]?.text || '';
-          const match = raw.match(/\{[\s\S]*\}/);
-          if (match) {
-            const { x, y } = JSON.parse(match[0]);
-            const dpr = window.devicePixelRatio || 1;
-            const cssX = Math.round(x / dpr), cssY = Math.round(y / dpr);
-            const hit  = document.elementFromPoint(cssX, cssY);
-            if (hit && hit !== document.body && hit !== document.documentElement) {
-              console.log(`🔍 _findEl T5 (coord) hit at CSS ${cssX},${cssY} for "${label}"`);
-              return hit;
-            }
+        if (coords) {
+          const dpr  = window.devicePixelRatio || 1;
+          const cssX = Math.round(coords.x / dpr), cssY = Math.round(coords.y / dpr);
+          const hit  = document.elementFromPoint(cssX, cssY);
+          if (hit && hit !== document.body && hit !== document.documentElement) {
+            console.log(`🔍 _findEl T5 (coord) hit at CSS ${cssX},${cssY} for "${label}"`);
+            return hit;
           }
         }
       } catch (_) {}
