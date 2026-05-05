@@ -374,31 +374,47 @@ Content Script                    Content Script
 
 ---
 
-### 4B — MCP Server (Basic Tools)
-**New file:** `workers/mcp-server.js` (Cloudflare Worker)
+### 4B — Native Tool-Use (No External MCP)
+**Decision:** External MCP servers rejected — see `docs/mcp-discuss.md` for full analysis.
+**Files:** `src/background/background.js` | `src/content/assistant.js` | `manifest.json`
 
 ```
-Tool Registry:
+3 tools implemented natively via Claude tool-use API:
 ┌─────────────────────────────────────────────────────┐
-│  find_element(description, page_context)             │
-│  → Runs confidence scoring remotely                  │
-│  → Returns best-match element descriptor             │
+│  get_accessibility_tree                              │
+│  → content script reads computedRole/Label/aria*    │
+│  → replaces screenshot for element identification   │
+│  → ~75% token cost reduction, ~95% accuracy         │
 │                                                      │
-│  get_page_state()                                    │
-│  → Returns structured page summary                  │
-│  → URL, title, element list, scroll position         │
+│  plan_session                                        │
+│  → one Claude call at session start                  │
+│  → generates ordered step list for the goal         │
+│  → per-step calls become cheap verification only    │
+│  → ~70% cost reduction for full sessions            │
 │                                                      │
-│  execute_action(action, target, value)               │
-│  → click / type / scroll / focus                    │
-│  → Content script executes, reports result          │
+│  inspect_element  (on demand)                        │
+│  → SW attaches chrome.debugger, runs CDP query       │
+│  → explains why an element is disabled/blocked      │
+│  → detaches immediately after (<200ms)              │
 └─────────────────────────────────────────────────────┘
 
-Claude tool-use loop:
-  Claude → "I need find_element('Search bar')"
-         → MCP server calls back to content script
-         → content script returns element
-         → Claude uses it in next response
+Tool-use loop (replaces one-shot JSON response):
+  Claude receives: screenshot + ARIA tree + plan step
+       │
+       ├── No tool needed
+       │     → {instruction, element, done}
+       │
+       ├── get_accessibility_tree
+       │     → SW asks content script to re-scan
+       │     → Claude re-reasons with ARIA data
+       │
+       └── inspect_element
+             → SW attaches debugger → CDP result
+             → Claude explains the block to user
 ```
+
+**Dependency:** 4A (SW owns all Claude calls — tool handlers live there)
+**Risk:** Medium — `chrome.debugger` shows a brief "being debugged" bar; mitigate by attaching/detaching per query only
 
 ---
 
