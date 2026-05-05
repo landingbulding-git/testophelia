@@ -48,7 +48,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // ── 4A: Agent Claude calls (offloaded from content script) ─────────────────
   if (request.action === 'analyze') {
-    _handleAnalyze(request).then(sendResponse).catch(() => sendResponse(null));
+    _handleAnalyze({ ...request, tabId: sender.tab?.id }).then(sendResponse).catch(() => sendResponse(null));
+    return true;
+  }
+  if (request.action === 'planSession') {
+    _handlePlanSession(request).then(sendResponse).catch(() => sendResponse(null));
     return true;
   }
   if (request.action === 'checkObstacle') {
@@ -113,8 +117,14 @@ async function _swRawText({ max_tokens, system, messages, stream }) {
   return data.content?.[0]?.text || '';
 }
 
-async function _handleAnalyze({ apiMessages, language }) {
+async function _handleAnalyze({ apiMessages, language, plan, tabId }) {
   const lang = language || 'en';
+
+  const planCtx = Array.isArray(plan) && plan.length
+    ? `\n\nSESSION PLAN (execute the most appropriate next step based on what\'s visible on screen):\n` +
+      plan.map((s, i) => `${i + 1}. ${s}`).join('\n')
+    : '';
+
   const system =
     `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
     `After every user action you receive a new screenshot and DOM state.\n\n` +
@@ -131,15 +141,127 @@ async function _handleAnalyze({ apiMessages, language }) {
     `Language: respond in "${lang}" \u2014 translate instructions naturally if not English.\n\n` +
     `RESPOND WITH ONLY VALID JSON \u2014 no prose, no markdown fences:\n` +
     `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
-    `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`;
+    `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}` +
+    planCtx;
 
-  const raw = await _swRawText({ max_tokens: 400, system, messages: apiMessages, stream: true });
-  console.log('\uD83E\uDDE0 SW analyze:', raw.substring(0, 200));
-  const match = raw.match(/{[\s\S]*}/);
-  if (!match) throw new Error('No JSON in analyze response');
-  const parsed = JSON.parse(match[0]);
-  parsed._raw = raw;
-  return parsed;
+  const tools = [
+    {
+      name: 'get_accessibility_tree',
+      description: 'Re-scan the page and return an enriched ARIA accessibility tree with computedRole, computedLabel, disabled/expanded/required states. Use when the DOM list seems incomplete or element states are unclear.',
+      input_schema: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'inspect_element',
+      description: 'Inspect a specific element to explain why it may be disabled or non-interactive. Returns computed state, form validation, and missing required fields.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          hint: { type: 'string', description: 'The element to inspect — its aria_label, visible text, or role' }
+        },
+        required: ['hint']
+      }
+    }
+  ];
+
+  const messages = [...apiMessages];
+  const MAX_ROUNDS = 3;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    // Enforce rate limit before each Claude call
+    const now = Date.now();
+    const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
+    if (gap > 0) await new Promise(r => setTimeout(r, gap));
+    _swLastCallAt = Date.now();
+
+    const res = await fetch(CLAUDE_WORKER, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 400, system, tools, messages })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(JSON.stringify(err));
+    }
+    const data = await res.json();
+
+    if (data.stop_reason === 'tool_use') {
+      const toolBlock = data.content.find(b => b.type === 'tool_use');
+      if (!toolBlock) break;
+
+      messages.push({ role: 'assistant', content: data.content });
+      let toolResult = 'Error: tool could not execute';
+
+      if (toolBlock.name === 'get_accessibility_tree' && tabId) {
+        toolResult = await new Promise(resolve => {
+          chrome.tabs.sendMessage(tabId, { action: 'getAriaTree' }, result => {
+            resolve(chrome.runtime.lastError
+              ? 'Error: content script unreachable'
+              : JSON.stringify(result || {}));
+          });
+        });
+        console.log('\uD83D\uDD27 SW tool get_accessibility_tree:', toolResult.substring(0, 200));
+      } else if (toolBlock.name === 'inspect_element' && tabId) {
+        toolResult = await new Promise(resolve => {
+          chrome.tabs.sendMessage(tabId, { action: 'inspectElement', hint: toolBlock.input.hint }, result => {
+            resolve(chrome.runtime.lastError
+              ? 'Error: content script unreachable'
+              : JSON.stringify(result || { found: false }));
+          });
+        });
+        console.log('\uD83D\uDD27 SW tool inspect_element:', toolResult.substring(0, 200));
+      }
+
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolBlock.id, content: toolResult }]
+      });
+      continue;
+    }
+
+    // Final text answer
+    const textBlock = data.content.find(b => b.type === 'text');
+    const raw = textBlock?.text || '';
+    console.log('\uD83E\uDDE0 SW analyze:', raw.substring(0, 200));
+    const match = raw.match(/{[\s\S]*}/);
+    if (!match) throw new Error('No JSON in analyze response');
+    const parsed = JSON.parse(match[0]);
+    parsed._raw = raw;
+    return parsed;
+  }
+
+  throw new Error('Tool-use loop reached max rounds without final answer');
+}
+
+async function _handlePlanSession({ goal, url, title, language }) {
+  const lang = language || 'en';
+  const now = Date.now();
+  const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
+  if (gap > 0) await new Promise(r => setTimeout(r, gap));
+  _swLastCallAt = Date.now();
+
+  const res = await fetch(CLAUDE_WORKER, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model:      'claude-sonnet-4-5',
+      max_tokens: 300,
+      system:
+        `You are a browser task planner. Given a goal and the current page, output a concise ordered list of browser actions needed to complete it.\n` +
+        `Reply ONLY with a JSON array of short action strings \u2014 no prose, no markdown:\n` +
+        `["Click the Sign Up button", "Enter your email address", ...]`,
+      messages: [{ role: 'user', content: `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}` }]
+    })
+  });
+  if (!res.ok) return [];
+  const data  = await res.json();
+  const raw   = data.content?.[0]?.text || '';
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    const plan = JSON.parse(match[0]);
+    console.log('\uD83D\uDCCB SW plan:', plan);
+    return Array.isArray(plan) ? plan : [];
+  } catch (_) { return []; }
 }
 
 async function _handleCheckObstacle({ screenshot }) {

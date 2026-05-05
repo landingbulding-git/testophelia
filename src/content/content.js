@@ -92,6 +92,14 @@
           stepCount: window.OpheliaRecorder.stepCount()
         });
         break;
+
+      case 'getAriaTree':
+        sendResponse(window.OpheliaAssistant?.getAriaTree?.() || null);
+        break;
+
+      case 'inspectElement':
+        sendResponse(window.OpheliaAssistant?.inspectElement?.(msg.hint) || null);
+        break;
     }
     return true;
   });
