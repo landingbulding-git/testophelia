@@ -12,4 +12,4 @@ invocation_logs = true
 # Then replace the id below with the real namespace ID
 [[kv_namespaces]]
 binding = "MCP_CACHE"
-id = "REPLACE_WITH_REAL_KV_NAMESPACE_ID"
+id = "4bd9453deb184ebfb59272bf9f5f832e"
