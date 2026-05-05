@@ -137,7 +137,7 @@ Popup slider:
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE 2                          (requires Phase 1 complete)       │
 │                                                                     │
-│  2A  Element Confidence Scoring ───────────── 3 hours              │
+│  2A  Element Confidence Scoring ───────────── 3 hours  ✅ DONE     │
 │      └─ scored _findEl(), threshold 50, fallback message to Claude  │
 │                                                                     │
 │  2B  Streaming TTS ────────────────────────── 4 hours              │
@@ -148,8 +148,9 @@ Popup slider:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2A — Element Confidence Scoring
-**File:** `src/content/assistant.js` → rewrite `_findEl()`
+### 2A — Element Confidence Scoring ✅ DONE
+**File:** `src/content/assistant.js` → rewrite `_findEl()`, add retry loop in `_analyze()`
+**Commit:** `feat: 2A element confidence scoring — threshold 50, 2-retry feedback loop to Claude`
 
 ```
 _findEl(descriptor)

@@ -60,7 +60,9 @@ for await (const chunk of stream) {
 
 ---
 
-## 3. Element Confidence Scoring
+## 3. Element Confidence Scoring ✅ IMPLEMENTED
+
+> `_findEl()` fully rewritten in `src/content/assistant.js` with scored matching (threshold 50). `_analyze()` gained a 2-retry feedback loop: when `_findEl()` returns null and Claude described an element, the failure is pushed back into conversation history and Claude re-examines silently.
 
 **Problem:** When `_findEl()` falls back to text-content substring matching, it can pick the wrong element (e.g., "Save" matches a "Save Draft" button instead of "Save Post").
 

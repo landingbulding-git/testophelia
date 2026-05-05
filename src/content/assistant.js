@@ -237,7 +237,7 @@ window.OpheliaAssistant = (() => {
   // ── Core analysis loop ──────────────────────────────────────────────────────
   // Called after every user action, navigation, or explicit message.
 
-  async function _analyze(trigger) {
+  async function _analyze(trigger, _retries = 0) {
     if (!_active) return;
     _waitingForAction = false;
     _clearHighlight();
@@ -296,6 +296,22 @@ window.OpheliaAssistant = (() => {
 
     // 5b. Show next step
     const el = step.element ? _findEl(step.element) : null;
+
+    if (!el && step.element && _retries < 2) {
+      // Element described but not found — push feedback to Claude and retry silently
+      const attrs = JSON.stringify(step.element);
+      _messages.push({
+        role: 'user',
+        content: [{ type: 'text', text:
+          `The element ${attrs} was not found in the DOM. ` +
+          `Re-examine the screenshot and DOM list and provide a different descriptor or a different instruction.`
+        }]
+      });
+      console.warn(`⚠️ _findEl failed (retry ${_retries + 1}/2), feeding back to Claude`);
+      setTimeout(() => { if (_active) _analyze('Element not found, re-examining.', _retries + 1); }, 1200);
+      return;
+    }
+
     _speak(step.instruction);
 
     if (el) {
@@ -534,29 +550,63 @@ window.OpheliaAssistant = (() => {
     }
   }
 
-  // ── Element finder ──────────────────────────────────────────────────────────
+  // ── Element finder — confidence scoring ────────────────────────────────────
+  // Scores every visible candidate against Claude's descriptor.
+  // Returns the best element only if score > 50; otherwise null so the
+  // caller can push feedback to Claude instead of highlighting wrong element.
 
   function _findEl(d) {
     if (!d) return null;
 
-    // Primary: player's multi-tier matcher
-    const primary = window.OpheliaPlayer?.findElement(d);
-    if (primary) return primary;
+    const nAria = (d.aria_label   || '').trim().toLowerCase();
+    const nText = (d.text_content || '').trim().toLowerCase();
+    const nTid  = (d.data_testid  || '').trim().toLowerCase();
+    const nTag  = (d.tag          || '').trim().toLowerCase();
 
-    // Fallback: visible element with matching aria-label or text content
-    const needle = (d.aria_label || d.text_content || '').trim().toLowerCase();
-    if (!needle) return null;
+    if (!nAria && !nText && !nTid) return null;
 
-    const SEL = 'button,a,input,select,[role="button"],[role="link"],[role="menuitem"],[role="tab"],[role="option"]';
-    for (const c of document.querySelectorAll(SEL)) {
-      const r = c.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) continue;
-      const al = (c.getAttribute('aria-label') || '').toLowerCase();
-      const tx = (c.textContent || '').trim().toLowerCase().slice(0, 80);
-      if (al.includes(needle) || needle.includes(al) ||
-          tx.includes(needle) || needle.includes(tx)) return c;
-    }
-    return null;
+    const SEL = [
+      'button', 'a[href]', 'input', 'select', 'textarea',
+      '[role="button"]', '[role="link"]', '[role="menuitem"]',
+      '[role="option"]', '[role="tab"]', '[role="checkbox"]',
+      '[role="switch"]', '[role="radio"]', '[aria-label]', '[data-testid]'
+    ].join(',');
+
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let best = null, bestScore = 0;
+
+    document.querySelectorAll(SEL).forEach(el => {
+      const r  = el.getBoundingClientRect();
+      const cs = window.getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return;
+      if (parseFloat(cs.opacity) === 0) return;
+
+      let score = 0;
+      const eAria = (el.getAttribute('aria-label')  || '').trim().toLowerCase();
+      const eTid  = (el.getAttribute('data-testid') || '').trim().toLowerCase();
+      const eText = (el.textContent || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80);
+      const eTag  = el.tagName.toLowerCase();
+
+      if (nAria && eAria) {
+        if (eAria === nAria)                                      score += 100;
+        else if (eAria.includes(nAria) || nAria.includes(eAria)) score +=  90;
+      }
+      if (nTid && eTid && eTid === nTid)                          score +=  80;
+      if (nText && eText) {
+        if (eText === nText)                                       score +=  70;
+        else if (eText.includes(nText) || nText.includes(eText))  score +=  50;
+      }
+
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cx >= 0 && cx <= vw && cy >= 0 && cy <= vh)             score +=  20;
+      if (nTag && eTag === nTag)                                   score +=  10;
+      if (r.width < 10 || r.height < 10)                          score -=  30;
+
+      if (score > bestScore) { bestScore = score; best = el; }
+    });
+
+    console.log(`🔍 _findEl score ${bestScore} for "${nAria || nText || nTid || '?'}"`);
+    return bestScore > 50 ? best : null;
   }
 
   // ── Element highlight — delegates to OpheliaOverlay (same as tutorial player) ─
