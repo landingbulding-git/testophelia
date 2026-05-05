@@ -253,6 +253,70 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
     planCtx +
     _getPlatformHints(pageUrl);
 
+  // ── Fast path: streaming, no tools — TTS fires on first token ───────────────
+  {
+    const now = Date.now();
+    const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
+    if (gap > 0) await new Promise(r => setTimeout(r, gap));
+    _swLastCallAt = Date.now();
+
+    const res = await fetch(CLAUDE_WORKER, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 400, system, messages: apiMessages, stream: true })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(JSON.stringify(err));
+    }
+
+    const reader   = res.body.getReader();
+    const decoder  = new TextDecoder();
+    const instrRe  = /"instruction"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+    let raw        = '';
+    let earlyFired = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+            raw += evt.delta.text;
+            if (!earlyFired) {
+              const m = raw.match(instrRe);
+              if (m) {
+                earlyFired = true;
+                const instr = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\t/g, '\t');
+                console.log('\u26A1 SW stream early instruction:', instr);
+                if (tabId) chrome.tabs.sendMessage(tabId, { action: 'earlyInstruction', instruction: instr }).catch(() => {});
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    console.log('\uD83E\uDDE0 SW analyze (stream):', raw.substring(0, 200));
+    const match = raw.match(/{[\s\S]*}/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        parsed._raw = raw;
+        if (earlyFired) parsed._instructionSpoken = true;
+        if (parsed.element || parsed.done) return parsed;
+      } catch (_) {}
+    }
+  }
+
+  // ── Tool path: fast path had no element — retry with tools ──────────────────
+  console.log('\uD83D\uDD27 SW analyze: no element in stream, trying tool-use\u2026');
+
   const tools = [
     {
       name: 'get_accessibility_tree',
@@ -265,18 +329,17 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
       input_schema: {
         type: 'object',
         properties: {
-          hint: { type: 'string', description: 'The element to inspect — its aria_label, visible text, or role' }
+          hint: { type: 'string', description: 'The element to inspect \u2014 its aria_label, visible text, or role' }
         },
         required: ['hint']
       }
     }
   ];
 
-  const messages = [...apiMessages];
-  const MAX_ROUNDS = 3;
+  const messages    = [...apiMessages];
+  const MAX_ROUNDS  = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    // Enforce rate limit before each Claude call
     const now = Date.now();
     const gap = MIN_CALL_GAP_MS - (now - _swLastCallAt);
     if (gap > 0) await new Promise(r => setTimeout(r, gap));
@@ -327,12 +390,11 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
       continue;
     }
 
-    // Final text answer
     const textBlock = data.content.find(b => b.type === 'text');
     const raw = textBlock?.text || '';
-    console.log('\uD83E\uDDE0 SW analyze:', raw.substring(0, 200));
+    console.log('\uD83E\uDDE0 SW analyze (tool):', raw.substring(0, 200));
     const match = raw.match(/{[\s\S]*}/);
-    if (!match) throw new Error('No JSON in analyze response');
+    if (!match) throw new Error('No JSON in tool-use response');
     const parsed = JSON.parse(match[0]);
     parsed._raw = raw;
     return parsed;

@@ -877,5 +877,9 @@ window.OpheliaAssistant = (() => {
       : (window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.onvoiceschanged = null; go(); });
   }
 
-  return { activate, stop, isActive, checkResume, getAriaTree: _scanPage, inspectElement: _inspectElement };
+  function earlyInstruction(text) {
+    if (text && _active) _speak(text);
+  }
+
+  return { activate, stop, isActive, checkResume, getAriaTree: _scanPage, inspectElement: _inspectElement, earlyInstruction };
 })();

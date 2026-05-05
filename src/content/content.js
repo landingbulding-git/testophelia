@@ -100,6 +100,11 @@
       case 'inspectElement':
         sendResponse(window.OpheliaAssistant?.inspectElement?.(msg.hint) || null);
         break;
+
+      case 'earlyInstruction':
+        window.OpheliaAssistant?.earlyInstruction?.(msg.instruction);
+        sendResponse({ ok: true });
+        break;
     }
     return true;
   });
