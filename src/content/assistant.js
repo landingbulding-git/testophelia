@@ -3,7 +3,7 @@
 // Multi-turn conversation: Claude remembers what's been done and adapts to page changes.
 window.OpheliaAssistant = (() => {
   // 4 messages = 2 full turns. Images stripped from all but latest → ~$0.005-0.008/step.
-  const MAX_HISTORY = 4;
+  const MAX_HISTORY = 12;
 
   let _goal      = '';
   let _messages  = []; // multi-turn conversation history
@@ -228,7 +228,8 @@ window.OpheliaAssistant = (() => {
 
     // Generate a session plan before first analysis (gives Claude step-level coherence)
     _setDotLabel('Planning…');
-    _plan = await _planSession();
+    const planScreenshot = await _captureScreen(); // visual context for the planner
+    _plan = await _planSession(planScreenshot);
     if (_plan.length) console.log('\uD83D\uDCCB Session plan:', _plan);
 
     _watchPage();
@@ -392,6 +393,7 @@ window.OpheliaAssistant = (() => {
       if (e.target.closest('#ophelia-fallback')) return;
       _clearHighlight();
       _setDotLabel('Processing…');
+      _lastPageKey    = '';   // force fresh screenshot — SPA tab switches don't change URL
       _preClickSnapshot = _domSnapshot();
       reanalyze('User just performed an action. What is the next step toward the goal?');
     };
@@ -478,7 +480,7 @@ window.OpheliaAssistant = (() => {
     ].join(',');
 
     const vw = window.innerWidth, vh = window.innerHeight;
-    const elements = [];
+    const combined = []; // {el, dist, data} — sorted by proximity to viewport center
     const seen = new Set();
     _scannedRefs = []; // reset refs for this scan
 
@@ -510,22 +512,34 @@ window.OpheliaAssistant = (() => {
       const vR = cy < 0      ? 'above'  : cy < vh / 3      ? 'top'     :
                  cy < 2*vh/3 ? 'mid'    : cy < vh           ? 'bottom'  : 'below';
 
-      _scannedRefs.push(el); // store real ref at this index
-      elements.push({
-        tag:          el.tagName.toLowerCase(),
-        role:         el.getAttribute('role') || el.computedRole || null,
-        aria_label:   aria || el.computedLabel || null,
-        data_testid:  testId || null,
-        text_content: ownText || null,
-        label,
-        position:     `${vR}-${hR}`,
-        disabled:     el.disabled || el.getAttribute('aria-disabled') === 'true' || null,
-        expanded:     el.getAttribute('aria-expanded') || null,
-        required:     el.required || el.getAttribute('aria-required') === 'true' || null
+      // Distance from viewport center — elements fully in view rank first
+      const dist = Math.abs(cy - vh / 2) + Math.abs(cx - vw / 2) * 0.3;
+
+      combined.push({
+        el,
+        dist,
+        data: {
+          tag:          el.tagName.toLowerCase(),
+          role:         el.getAttribute('role') || el.computedRole || null,
+          aria_label:   aria || el.computedLabel || null,
+          data_testid:  testId || null,
+          text_content: ownText || null,
+          label,
+          position:     `${vR}-${hR}`,
+          disabled:     el.disabled || el.getAttribute('aria-disabled') === 'true' || null,
+          expanded:     el.getAttribute('aria-expanded') || null,
+          required:     el.required || el.getAttribute('aria-required') === 'true' || null
+        }
       });
     });
 
-    return { url: location.href, title: document.title, elements: elements.slice(0, 40) };
+    // Sort: closest to viewport center first (most relevant to user's current focus)
+    combined.sort((a, b) => a.dist - b.dist);
+    const top = combined.slice(0, 80);
+    _scannedRefs = top.map(c => c.el);
+    const elements = top.map(c => c.data);
+
+    return { url: location.href, title: document.title, elements };
   }
 
   // ── Obstacle detector (pre-flight, now handled by SW) ──────────────────────
@@ -756,11 +770,11 @@ window.OpheliaAssistant = (() => {
 
   // ── Session planner (4B tool: plan_session) ────────────────────────────
 
-  async function _planSession() {
+  async function _planSession(screenshot) {
     const dom = _scanPage();
     return new Promise(resolve => {
       chrome.runtime.sendMessage(
-        { action: 'planSession', goal: _goal, url: dom.url, title: dom.title, language: navigator.language || 'en' },
+        { action: 'planSession', goal: _goal, url: dom.url, title: dom.title, language: navigator.language || 'en', screenshot: screenshot || null },
         plan => {
           if (chrome.runtime.lastError || !Array.isArray(plan) || !plan.length) {
             resolve([]);

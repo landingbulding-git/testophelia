@@ -395,7 +395,7 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
         const parsed = JSON.parse(match[0]);
         parsed._raw = raw;
         if (earlyFired) parsed._instructionSpoken = true;
-        if (parsed.element || parsed.done) return parsed;
+        if (parsed.elementIndex !== undefined || parsed.done) return parsed;
       } catch (_) {}
     }
   }
@@ -505,7 +505,7 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, ste
   throw new Error('Tool-use loop reached max rounds without final answer');
 }
 
-async function _handlePlanSession({ goal, url, title, language }) {
+async function _handlePlanSession({ goal, url, title, language, screenshot }) {
   const lang       = language || 'en';
   const platformId = _getPlatformId(url);
 
@@ -549,7 +549,13 @@ async function _handlePlanSession({ goal, url, title, language }) {
         `["Click the Workflow tab in the left sidebar", "Click + Add an action", ...]` +
         platformCtx +
         toolsCtx,
-      messages: [{ role: 'user', content: `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}` }]
+      messages: [{ role: 'user', content: screenshot
+        ? [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
+            { type: 'text',  text:  `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}` }
+          ]
+        : `Goal: "${goal}"\nCurrent page: ${title} (${url})\nLanguage: ${lang}`
+      }]
     })
   });
   if (!res.ok) return [];
