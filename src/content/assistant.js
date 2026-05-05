@@ -130,7 +130,47 @@ window.OpheliaAssistant = (() => {
   // ── Goal / message listeners ────────────────────────────────────────────────
 
   function _listenForGoal() {
-    _startMic((goal) => _startSession(goal));
+    _startMic(async (goal) => {
+      const check = await _clarifyGoal(goal);
+      if (check.clear) {
+        _startSession(goal);
+      } else {
+        // Speak the question, then reopen mic once TTS finishes
+        _speak(check.question, () => {
+          _setDotLabel('🔴 Listening…  (press Ctrl+Space to send)');
+          _startMic((refined) => _startSession(refined || goal));
+        });
+      }
+    });
+  }
+
+  async function _clarifyGoal(goal) {
+    _setDotLabel('Thinking…');
+    try {
+      const res = await fetch(CLAUDE_WORKER, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model:      'claude-sonnet-4-5',
+          max_tokens: 120,
+          system:
+            `You assess whether a user's goal is specific enough to guide step by step in a browser.\n` +
+            `Reply ONLY with valid JSON — no prose:\n` +
+            `{"clear":true}  — goal is actionable and specific.\n` +
+            `{"clear":false,"question":"..."}  — too vague; one short clarifying question, max 12 words.`,
+          messages: [{ role: 'user', content: `Goal: "${goal}"` }]
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data  = await res.json();
+      const raw   = data.content?.[0]?.text || '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('No JSON');
+      return JSON.parse(match[0]);
+    } catch (e) {
+      console.warn('⚠️ _clarifyGoal failed, proceeding directly:', e);
+      return { clear: true }; // fail open — never block the session
+    }
   }
 
   function _listenForMessage() {
@@ -600,10 +640,11 @@ window.OpheliaAssistant = (() => {
 
   // ── TTS ─────────────────────────────────────────────────────────────────────
 
-  function _speak(text) {
-    if (!window.speechSynthesis) return;
+  function _speak(text, onEnd) {
+    if (!window.speechSynthesis) { if (onEnd) onEnd(); return; }
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
+    if (onEnd) utt.onend = onEnd;
     utt.rate = 1.05; utt.pitch = 1.0; utt.volume = 1.0;
     const go = () => {
       const v    = window.speechSynthesis.getVoices();

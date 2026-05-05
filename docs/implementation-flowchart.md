@@ -28,7 +28,7 @@ No deps    Needs Ph.1   Needs Ph.1   Needs Ph.1–3
 │  1A  Prompt Improvements ──────────────────── 1 hour  ✅ DONE       │
 │      └─ scroll hint, wait hint, recovery rule, no-hallucinate rule  │
 │                                                                     │
-│  1B  Goal Clarification Turn ──────────────── 2 hours              │
+│  1B  Goal Clarification Turn ──────────────── 2 hours  ✅ DONE     │
 │      └─ pre-analysis Claude call, one question max, TTS ask         │
 │                                                                     │
 │  1C  Screenshot Compression / Skipping ────── 2 hours              │
@@ -55,8 +55,9 @@ Add 4 rules to the existing system prompt:
 
 ---
 
-### 1B — Goal Clarification Turn
-**File:** `src/content/assistant.js` → new `_clarifyGoal(goal)` function, called from `_startSession()`
+### 1B — Goal Clarification Turn ✅ DONE
+**File:** `src/content/assistant.js` → new `_clarifyGoal(goal)` function, updated `_listenForGoal()`, optional `onEnd` added to `_speak()`
+**Commit:** `feat: 1B goal clarification — pre-flight Claude check, TTS question, mic reopen`
 
 ```
 _startSession(goal)

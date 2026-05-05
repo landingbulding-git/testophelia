@@ -15,7 +15,9 @@
 
 ---
 
-## 1. Goal Clarification Turn (Quick Win)
+## 1. Goal Clarification Turn (Quick Win) ✅ IMPLEMENTED
+
+> `_clarifyGoal()` added to `src/content/assistant.js`. `_listenForGoal()` now calls it before `_startSession()`. `_speak()` gained optional `onEnd` callback so mic reopens only after TTS finishes the question.
 
 **Problem:** Users often state vague goals ("help me with Facebook") and Claude makes assumptions.
 
