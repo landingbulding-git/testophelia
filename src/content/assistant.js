@@ -3,8 +3,10 @@
 // Multi-turn conversation: Claude remembers what's been done and adapts to page changes.
 window.OpheliaAssistant = (() => {
   const CLAUDE_WORKER = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev/claude';
-  // 8 messages = 4 full turns. Images stripped from all but latest → ~$0.01-0.015/step.
-  const MAX_HISTORY   = 8;
+  // 4 messages = 2 full turns. Images stripped from all but latest → ~$0.005-0.008/step.
+  const MAX_HISTORY     = 4;
+  const MIN_CALL_GAP_MS = 2000; // minimum ms between consecutive Claude calls
+  let   _lastCallAt     = 0;
 
   let _goal      = '';
   let _messages  = []; // multi-turn conversation history
@@ -447,12 +449,18 @@ window.OpheliaAssistant = (() => {
       });
     });
 
-    return { url: location.href, title: document.title, elements: elements.slice(0, 90) };
+    return { url: location.href, title: document.title, elements: elements.slice(0, 40) };
   }
 
   // ── Claude call (multi-turn) ────────────────────────────────────────────────
 
   async function _callClaude() {
+    // Enforce minimum gap between calls to stay under token-per-minute rate limit
+    const now = Date.now();
+    const gap = MIN_CALL_GAP_MS - (now - _lastCallAt);
+    if (gap > 0) await new Promise(r => setTimeout(r, gap));
+    _lastCallAt = Date.now();
+
     try {
       // Build messages for API — strip images from all turns except the last user turn
       const apiMessages = _messages.map((m, i) => {
