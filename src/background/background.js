@@ -260,7 +260,7 @@ async function _swRawText({ max_tokens, system, messages, stream }) {
   return data.content?.[0]?.text || '';
 }
 
-async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
+async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId, stepFailed }) {
   const lang = language || 'en';
 
   const planCtx = Array.isArray(plan) && plan.length
@@ -286,7 +286,10 @@ async function _handleAnalyze({ apiMessages, language, plan, pageUrl, tabId }) {
     `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
     `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}` +
     planCtx +
-    _getPlatformHints(pageUrl);
+    _getPlatformHints(pageUrl) +
+    (stepFailed
+      ? `\n\nSTEP FAILED: The previous action had no visible effect — the DOM did not change after the user clicked. Use the inspect_element tool to diagnose why. Then explain clearly what went wrong and what the user should do instead. Do NOT repeat the same instruction.`
+      : '');
 
   // ── Fast path: streaming, no tools — TTS fires on first token ───────────────
   {
