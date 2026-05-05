@@ -243,7 +243,7 @@ On stop():
 │  3A  Proactive Obstacle Detection ─────────── 3 hours  ✅ DONE     │
 │      └─ pre-check Claude call, cookie banners, modals, login walls  │
 │                                                                     │
-│  3B  Multi-Modal Element Search ───────────── 5 hours              │
+│  3B  Multi-Modal Element Search ───────────── 5 hours  ✅ DONE     │
 │      └─ coordinate fallback, shadow DOM, iframe pierce              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -275,8 +275,9 @@ _checkObstacle(screenshot)
 
 ---
 
-### 3B — Multi-Modal Element Search
-**File:** `src/content/assistant.js` → extend `_findEl()` with 3 extra tiers
+### 3B — Multi-Modal Element Search ✅ DONE
+**File:** `src/content/assistant.js` → `_findEl()` rewritten as async 5-tier search
+**Commit:** `feat: 3B multi-modal element search — shadow DOM, iframe, Claude coord fallback`
 
 ```
 _findEl(descriptor)

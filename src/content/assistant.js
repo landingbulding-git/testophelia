@@ -345,7 +345,7 @@ window.OpheliaAssistant = (() => {
     }
 
     // 5b. Show next step
-    const el = step.element ? _findEl(step.element) : null;
+    const el = step.element ? await _findEl(step.element, screenshot) : null;
 
     if (!el && step.element && _retries < 2) {
       // Element described but not found — push feedback to Claude and retry silently
@@ -673,18 +673,20 @@ window.OpheliaAssistant = (() => {
     }
   }
 
-  // ── Element finder — confidence scoring ────────────────────────────────────
-  // Scores every visible candidate against Claude's descriptor.
-  // Returns the best element only if score > 50; otherwise null so the
-  // caller can push feedback to Claude instead of highlighting wrong element.
+  // ── Element finder — 5-tier multi-modal search (3B) ──────────────────────
+  // Tier 1: confidence scoring on main document (from 2A)
+  // Tier 3: shadow DOM pierce
+  // Tier 4: iframe pierce
+  // Tier 5: Claude coordinate fallback (screenshot → {x,y} → elementFromPoint)
 
-  function _findEl(d) {
+  async function _findEl(d, screenshot) {
     if (!d) return null;
 
     const nAria = (d.aria_label   || '').trim().toLowerCase();
     const nText = (d.text_content || '').trim().toLowerCase();
     const nTid  = (d.data_testid  || '').trim().toLowerCase();
     const nTag  = (d.tag          || '').trim().toLowerCase();
+    const label = nAria || nText || nTid || '?';
 
     if (!nAria && !nText && !nTid) return null;
 
@@ -696,40 +698,125 @@ window.OpheliaAssistant = (() => {
     ].join(',');
 
     const vw = window.innerWidth, vh = window.innerHeight;
-    let best = null, bestScore = 0;
 
-    document.querySelectorAll(SEL).forEach(el => {
+    // Shared scorer — returns numeric score for a single element (-Infinity if hidden)
+    function _score(el) {
       const r  = el.getBoundingClientRect();
       const cs = window.getComputedStyle(el);
-      if (cs.display === 'none' || cs.visibility === 'hidden') return;
-      if (parseFloat(cs.opacity) === 0) return;
+      if (cs.display === 'none' || cs.visibility === 'hidden') return -Infinity;
+      if (parseFloat(cs.opacity) === 0)                        return -Infinity;
 
-      let score = 0;
+      let s = 0;
       const eAria = (el.getAttribute('aria-label')  || '').trim().toLowerCase();
       const eTid  = (el.getAttribute('data-testid') || '').trim().toLowerCase();
       const eText = (el.textContent || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80);
       const eTag  = el.tagName.toLowerCase();
 
       if (nAria && eAria) {
-        if (eAria === nAria)                                      score += 100;
-        else if (eAria.includes(nAria) || nAria.includes(eAria)) score +=  90;
+        if (eAria === nAria)                                      s += 100;
+        else if (eAria.includes(nAria) || nAria.includes(eAria)) s +=  90;
       }
-      if (nTid && eTid && eTid === nTid)                          score +=  80;
+      if (nTid && eTid && eTid === nTid)                          s +=  80;
       if (nText && eText) {
-        if (eText === nText)                                       score +=  70;
-        else if (eText.includes(nText) || nText.includes(eText))  score +=  50;
+        if (eText === nText)                                       s +=  70;
+        else if (eText.includes(nText) || nText.includes(eText))  s +=  50;
       }
-
       const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-      if (cx >= 0 && cx <= vw && cy >= 0 && cy <= vh)             score +=  20;
-      if (nTag && eTag === nTag)                                   score +=  10;
-      if (r.width < 10 || r.height < 10)                          score -=  30;
+      if (cx >= 0 && cx <= vw && cy >= 0 && cy <= vh)             s +=  20;
+      if (nTag && eTag === nTag)                                   s +=  10;
+      if (r.width < 10 || r.height < 10)                          s -=  30;
+      return s;
+    }
 
-      if (score > bestScore) { bestScore = score; best = el; }
-    });
+    // Pick best-scoring element from a NodeList/Array, threshold > 50
+    function _bestIn(list) {
+      let best = null, bestScore = 0;
+      list.forEach(el => {
+        const s = _score(el);
+        if (s > bestScore) { bestScore = s; best = el; }
+      });
+      return bestScore > 50 ? best : null;
+    }
 
-    console.log(`🔍 _findEl score ${bestScore} for "${nAria || nText || nTid || '?'}"`);
-    return bestScore > 50 ? best : null;
+    // ── Tier 1: main document ──────────────────────────────────────────────
+    let result = _bestIn(document.querySelectorAll(SEL));
+    if (result) {
+      console.log(`🔍 _findEl T1 hit for "${label}"`);
+      return result;
+    }
+
+    // ── Tier 3: shadow DOM pierce ──────────────────────────────────────────
+    try {
+      const shadowCandidates = [];
+      document.querySelectorAll('*').forEach(host => {
+        if (!host.shadowRoot) return;
+        try { shadowCandidates.push(...host.shadowRoot.querySelectorAll(SEL)); } catch (_) {}
+      });
+      result = _bestIn(shadowCandidates);
+      if (result) {
+        console.log(`🔍 _findEl T3 (shadow) hit for "${label}"`);
+        return result;
+      }
+    } catch (_) {}
+
+    // ── Tier 4: iframe pierce ──────────────────────────────────────────────
+    try {
+      const iframeCandidates = [];
+      document.querySelectorAll('iframe').forEach(frame => {
+        try {
+          const doc = frame.contentDocument;
+          if (doc) iframeCandidates.push(...doc.querySelectorAll(SEL));
+        } catch (_) {}
+      });
+      result = _bestIn(iframeCandidates);
+      if (result) {
+        console.log(`🔍 _findEl T4 (iframe) hit for "${label}"`);
+        return result;
+      }
+    } catch (_) {}
+
+    // ── Tier 5: Claude coordinate fallback ────────────────────────────────
+    if (screenshot) {
+      try {
+        const res = await fetch(CLAUDE_WORKER, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model:      'claude-sonnet-4-5',
+            max_tokens: 30,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
+                { type: 'text', text:
+                  `Point to the element described as: "${label}".\n` +
+                  `Reply ONLY with valid JSON — no prose: {"x":N,"y":N}\n` +
+                  `x and y are pixel coordinates in the screenshot (top-left = 0,0).`
+                }
+              ]
+            }]
+          })
+        });
+        if (res.ok) {
+          const data  = await res.json();
+          const raw   = data.content?.[0]?.text || '';
+          const match = raw.match(/\{[\s\S]*\}/);
+          if (match) {
+            const { x, y } = JSON.parse(match[0]);
+            const dpr = window.devicePixelRatio || 1;
+            const cssX = Math.round(x / dpr), cssY = Math.round(y / dpr);
+            const hit  = document.elementFromPoint(cssX, cssY);
+            if (hit && hit !== document.body && hit !== document.documentElement) {
+              console.log(`🔍 _findEl T5 (coord) hit at CSS ${cssX},${cssY} for "${label}"`);
+              return hit;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    console.log(`🔍 _findEl all tiers failed for "${label}"`);
+    return null;
   }
 
   // ── Element highlight — delegates to OpheliaOverlay (same as tutorial player) ─

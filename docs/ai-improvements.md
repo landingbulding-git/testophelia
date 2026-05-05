@@ -142,7 +142,9 @@ This adds one small Claude call but prevents Claude from giving impossible steps
 
 ---
 
-## 7. Multi-Modal Element Search
+## 7. Multi-Modal Element Search ✅ IMPLEMENTED
+
+> `_findEl()` rewritten as `async function _findEl(d, screenshot)` with 5 tiers: T1 main doc scoring, T3 shadow DOM pierce, T4 iframe pierce, T5 Claude coordinate fallback (`max_tokens:30`, `{x,y}` → `elementFromPoint` with DPR scaling). Call site updated to `await _findEl(step.element, screenshot)`.
 
 **Problem:** Sometimes Claude returns an element that exists but is in a shadow DOM, inside an iframe, or rendered via canvas — none of which `_findEl()` can reach.
 
