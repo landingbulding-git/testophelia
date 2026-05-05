@@ -19,7 +19,8 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Screenshot for the live agent
   if (request.action === 'captureTab') {
-    chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 70 }, dataUrl => {
+    const quality = typeof request.quality === 'number' ? request.quality : 70;
+    chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality }, dataUrl => {
       if (chrome.runtime.lastError) {
         sendResponse({ error: chrome.runtime.lastError.message });
       } else {

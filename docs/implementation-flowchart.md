@@ -31,7 +31,7 @@ No deps    Needs Ph.1   Needs Ph.1   Needs Ph.1–3
 │  1B  Goal Clarification Turn ──────────────── 2 hours  ✅ DONE     │
 │      └─ pre-analysis Claude call, one question max, TTS ask         │
 │                                                                     │
-│  1C  Screenshot Compression / Skipping ────── 2 hours              │
+│  1C  Screenshot Compression / Skipping ────── 2 hours  ✅ DONE     │
 │      └─ pageKey cache, adaptive JPEG quality 50–75%                 │
 │                                                                     │
 │  1D  Persona & Language Selection ─────────── 1 hour               │
@@ -81,8 +81,9 @@ _analyze()   _speak(question)
 
 ---
 
-### 1C — Screenshot Compression / Skipping
-**File:** `src/content/assistant.js` → `_captureScreen()` + new `_lastPageKey` variable
+### 1C — Screenshot Compression / Skipping ✅ DONE
+**Files:** `src/content/assistant.js` → `_captureScreen()` + 3 state vars | `src/background/background.js` → `quality` param
+**Commit:** `feat: 1C screenshot cache + adaptive quality — 50px pageKey, 75/70/50% JPEG`
 
 ```
 _captureScreen()

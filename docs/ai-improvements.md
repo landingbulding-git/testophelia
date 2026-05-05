@@ -81,7 +81,9 @@ Pick the highest scorer above threshold 50. If no element scores >50, skip highl
 
 ---
 
-## 4. Screenshot Compression / Skipping (Cost Reduction)
+## 4. Screenshot Compression / Skipping (Cost Reduction) ✅ IMPLEMENTED
+
+> `_captureScreen()` rewritten in `src/content/assistant.js` with `pageKey` cache (50px scroll buckets) and adaptive quality. `src/background/background.js` now accepts `quality` param (default 70).
 
 **Problem:** Every step sends a ~1,200–2,000 token screenshot even when the page hasn't changed.
 

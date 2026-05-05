@@ -14,6 +14,11 @@ window.OpheliaAssistant = (() => {
   let _cleanupFns = []; // teardown callbacks for event listeners / timers
   let _highlightedEl = null;
 
+  // ── Screenshot cache ─────────────────────────────────────────────────
+  let _lastPageKey    = '';   // "href|scrollBucket" of last capture
+  let _lastScreenshot = null; // base64 of last capture (reused on cache hit)
+  let _stepsSinceNav  = 0;    // steps taken on the current URL (drives quality decay)
+
   // ── Mic state ────────────────────────────────────────────────────────────────
   let _mic              = null;  // active SpeechRecognition instance
   let _micActive        = false; // true while recording
@@ -214,6 +219,7 @@ window.OpheliaAssistant = (() => {
     _messages = [];
     _active = true;
     _stepCount = 0;
+    _lastPageKey = ''; _lastScreenshot = null; _stepsSinceNav = 0;
 
     _watchPage();
     await _analyze('What is the first step the user should take?');
@@ -350,16 +356,39 @@ window.OpheliaAssistant = (() => {
     _analyze('User skipped this step. What is the next step toward the goal?');
   }
 
-  // ── Screenshot ──────────────────────────────────────────────────────────────
+  // ── Screenshot (with pageKey cache + adaptive JPEG quality) ────────────────────
+  // Cache hit:  same URL + same 50px scroll bucket → return previous base64 (no network call)
+  // Quality:    URL just changed → 75% | 0–1 steps on page → 70% | 2+ steps → 50%
 
   function _captureScreen() {
+    // Round scrollY to 50px buckets — minor scroll jitter shouldn't bust the cache
+    const pageKey = `${location.href}|${Math.round(window.scrollY / 50) * 50}`;
+
+    // Cache hit: page hasn't meaningfully changed
+    if (pageKey === _lastPageKey && _lastScreenshot) {
+      console.log('📷 Screenshot cache hit');
+      return Promise.resolve(_lastScreenshot);
+    }
+
+    // Detect navigation: href differs from what was cached
+    const urlChanged = !!_lastPageKey && !_lastPageKey.startsWith(location.href + '|');
+    if (urlChanged) _stepsSinceNav = 0;
+
+    // Adaptive quality: high after nav, normal early-page, reduced once page is stable
+    const quality = urlChanged ? 75 : (_stepsSinceNav >= 2 ? 50 : 70);
+
+    _lastPageKey = pageKey;
+    _stepsSinceNav++;
+    console.log(`📷 Capturing screenshot — quality ${quality}%, stepsSinceNav ${_stepsSinceNav}`);
+
     return new Promise(resolve => {
       try {
-        chrome.runtime.sendMessage({ action: 'captureTab' }, res => {
+        chrome.runtime.sendMessage({ action: 'captureTab', quality }, res => {
           if (chrome.runtime.lastError) { resolve(null); return; }
           const url = res?.dataUrl || null;
-          // Strip data URL prefix, return raw base64
-          resolve(url ? url.replace(/^data:image\/[a-z]+;base64,/, '') : null);
+          const b64 = url ? url.replace(/^data:image\/[a-z]+;base64,/, '') : null;
+          _lastScreenshot = b64;
+          resolve(b64);
         });
       } catch (_) { resolve(null); }
     });
