@@ -312,7 +312,7 @@ window.OpheliaAssistant = (() => {
       return;
     }
 
-    _speak(step.instruction);
+    if (!step._instructionSpoken) _speak(step.instruction);
 
     if (el) {
       // Instant scroll so getBoundingClientRect is correct immediately.
@@ -502,30 +502,33 @@ window.OpheliaAssistant = (() => {
         return { role: m.role, content: m.content };
       });
 
+      const systemPrompt =
+        `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
+        `After every user action you receive a new screenshot and DOM state.\n\n` +
+        `YOUR ONLY JOB: identify the single next action the user must take to reach their goal.\n\n` +
+        `RULES:\n` +
+        `1. One action per response. Never combine multiple actions.\n` +
+        `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
+        `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
+        `4. Instructions: short, plain English, max 12 words.\n` +
+        `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
+        `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
+        `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
+        `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n` +
+        `Language: respond in "${navigator.language || 'en'}" — translate instructions naturally if not English.\n\n` +
+        `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
+        `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
+        `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`;
+
       const res = await fetch(CLAUDE_WORKER, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model:      'claude-sonnet-4-5',
           max_tokens: 400,
-          system:
-            `You are Ophelia, a live browser co-pilot. You see the user's browser via screenshots and a DOM element list.\n` +
-            `After every user action you receive a new screenshot and DOM state.\n\n` +
-            `YOUR ONLY JOB: identify the single next action the user must take to reach their goal.\n\n` +
-            `RULES:\n` +
-            `1. One action per response. Never combine multiple actions.\n` +
-            `2. For elements in the DOM list: copy their JSON attributes verbatim into "element".\n` +
-            `3. For elements not yet visible (inside menus/dialogs not yet open): use your site knowledge.\n` +
-            `4. Instructions: short, plain English, max 12 words.\n` +
-            `5. If the target element is likely below the visible area, include "scroll down to find it" in the instruction.\n` +
-            `6. If the page shows a loading spinner or skeleton screen, instruct the user to wait before acting.\n` +
-            `7. If you cannot identify the exact element, respond: {"instruction":"I couldn't find that element. Try scrolling or describe what you see.","element":null,"done":false}\n` +
-            `8. Never invent element attributes not present in the DOM list — use only what appears verbatim.\n` +
-            `Language: respond in "${navigator.language || 'en'}" — translate instructions naturally if not English.\n\n` +
-            `RESPOND WITH ONLY VALID JSON — no prose, no markdown fences:\n` +
-            `{"instruction":"short action","element":{"tag":"","aria_label":"","text_content":"","role":""},"done":false}\n` +
-            `When the goal is fully achieved: {"instruction":"All done!","done":true,"element":null}`,
-          messages: apiMessages
+          stream:     true,
+          system:     systemPrompt,
+          messages:   apiMessages
         })
       });
 
@@ -535,14 +538,48 @@ window.OpheliaAssistant = (() => {
         return null;
       }
 
-      const data = await res.json();
-      const raw  = data.content?.[0]?.text || '';
-      console.log('🧠 Claude:', raw.substring(0, 300));
+      // ── SSE stream reader ──────────────────────────────────────────────────
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated        = '';
+      let instructionSpoken  = false;
 
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) { console.error('No JSON in Claude response'); return null; }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Parse SSE lines from this chunk
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              accumulated += evt.delta.text;
+            }
+          } catch (_) {}
+        }
+
+        // Speak instruction as soon as its closing quote appears in the stream
+        if (!instructionSpoken) {
+          const instMatch = accumulated.match(/"instruction"\s*:\s*"((?:[^"\\]|\\.)*?)"/);
+          if (instMatch) {
+            const instr = instMatch[1].replace(/\\"/g, '"').replace(/\\n/g, ' ');
+            _speak(instr);
+            instructionSpoken = true;
+            console.log('🔊 Streaming TTS fired early:', instr);
+          }
+        }
+      }
+
+      console.log('🧠 Claude (stream):', accumulated.substring(0, 300));
+      const match = accumulated.match(/\{[\s\S]*\}/);
+      if (!match) { console.error('No JSON in Claude stream'); return null; }
       const parsed = JSON.parse(match[0]);
-      parsed._raw = raw;
+      parsed._raw              = accumulated;
+      parsed._instructionSpoken = instructionSpoken;
       return parsed;
     } catch (e) {
       console.error('❌ _callClaude failed:', e);

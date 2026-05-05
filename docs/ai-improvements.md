@@ -40,7 +40,9 @@ Ophelia: → starts analyzing
 
 ---
 
-## 2. Streaming TTS (Reduce Perceived Latency)
+## 2. Streaming TTS (Reduce Perceived Latency) ✅ IMPLEMENTED
+
+> `workers/gemini.js` now pipes Anthropic SSE body directly when `stream:true`. `_callClaude()` rewritten as SSE reader — fires `_speak(instruction)` the moment the instruction field closes in the stream. `_analyze()` skips its own `_speak()` via `_instructionSpoken` flag.
 
 **Problem:** User must wait for the full Claude response before hearing anything (~1–2 seconds silent wait).
 

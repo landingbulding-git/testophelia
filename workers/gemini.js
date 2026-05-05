@@ -37,20 +37,38 @@ async function handleClaude(request, env) {
     max_tokens: body.max_tokens || 1500,
     messages:   body.messages
   };
-  if (body.system) claudeBody.system = body.system;
+  if (body.system)  claudeBody.system = body.system;
+  if (body.stream)  claudeBody.stream = true;
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
-      'Content-Type':    'application/json',
-      'x-api-key':       apiKey,
+      'Content-Type':      'application/json',
+      'x-api-key':         apiKey,
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify(claudeBody)
   });
 
-  const data = await response.json();
-  return jsonResponse(data, response.status);
+  // Streaming: pipe SSE body directly to the caller
+  if (body.stream) {
+    if (!upstream.ok) {
+      const err = await upstream.json().catch(() => ({}));
+      return jsonResponse(err, upstream.status);
+    }
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        'Content-Type':  'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
+  }
+
+  // Non-streaming (fallback, used by _clarifyGoal)
+  const data = await upstream.json();
+  return jsonResponse(data, upstream.status);
 }
 
 // ── Gemini handler (unchanged) ────────────────────────────────────────────────

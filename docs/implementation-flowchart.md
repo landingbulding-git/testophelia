@@ -140,7 +140,7 @@ Popup slider:
 │  2A  Element Confidence Scoring ───────────── 3 hours  ✅ DONE     │
 │      └─ scored _findEl(), threshold 50, fallback message to Claude  │
 │                                                                     │
-│  2B  Streaming TTS ────────────────────────── 4 hours              │
+│  2B  Streaming TTS ──────────────────────── 4 hours  ✅ DONE     │
 │      └─ SSE stream from Worker, extract instruction field early     │
 │                                                                     │
 │  2C  Cross-Page Memory ────────────────────── 3 hours              │
@@ -178,10 +178,9 @@ bestScore > 50 ?
 
 ---
 
-### 2B — Streaming TTS
-**Files:**
-- `workers/gemini.js` → enable `stream: true` passthrough to Anthropic
-- `src/content/assistant.js` → `_callClaude()` rewrite to SSE reader
+### 2B — Streaming TTS ✅ DONE
+**Files:** `workers/gemini.js` → SSE pipe | `src/content/assistant.js` → SSE reader + early `_speak()`
+**Commit:** `feat: 2B streaming TTS — SSE pipe in worker, early instruction speak in stream reader`
 
 ```
 _callClaude()
