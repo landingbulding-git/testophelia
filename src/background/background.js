@@ -54,11 +54,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'tutorialToGuidance') {
     (async () => {
       try {
+        console.log('🧭 SW tutorialToGuidance received');
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.url) {
           sendResponse({ error: 'No active tab' });
           return;
         }
+        console.log('🧭 SW active tab URL:', tab.url);
         if (!isYoutubeWatchOrShortUrl(tab.url)) {
           sendResponse({ error: 'Open a YouTube video tab first (watch, Shorts, or youtu.be).' });
           return;
@@ -74,15 +76,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+          console.error('❌ SW gateway error:', res.status, data);
           sendResponse({ error: data.error || `Gateway ${res.status}` });
           return;
         }
+        console.log('✅ SW tutorialToGuidance success:', data.notionPageUrl);
         sendResponse({
           notionPageUrl: data.notionPageUrl,
           databaseUrl: data.databaseUrl,
           stepCount: data.stepCount
         });
       } catch (err) {
+        console.error('❌ SW tutorialToGuidance exception:', err);
         sendResponse({ error: err.message || String(err) });
       }
     })();

@@ -13,10 +13,12 @@ window.OpheliaAssistant = (() => {
   let _micFinalText = '';    // accumulated final transcript
   let _micCallback  = null;  // called with final text on _stopMic()
 
-  /** Voice intent: "tutorial … guidance" (both words, any order). */
+  /** Voice intent matcher with tolerance for common STT variations. */
   function matchesTutorialToGuidanceIntent(text) {
-    const t = String(text).toLowerCase();
-    return t.includes('tutorial') && t.includes('guidance');
+    const t = String(text).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const hasTutorial = /\btutorial\b/.test(t);
+    const hasGuidanceFamily = /\bguidance\b|\bguidence\b|\bguide\b|\bguided\b/.test(t);
+    return hasTutorial && hasGuidanceFamily;
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -34,6 +36,7 @@ window.OpheliaAssistant = (() => {
       _setDotLabel(`"${transcript.slice(0, 80)}"`);
 
       if (matchesTutorialToGuidanceIntent(transcript)) {
+        console.log('🧭 Ophelia intent matched: tutorial-to-guidance');
         _setDotLabel('Creating Notion plan…');
         chrome.runtime.sendMessage(
           {
@@ -43,19 +46,36 @@ window.OpheliaAssistant = (() => {
           },
           (res) => {
             if (chrome.runtime.lastError) {
+              console.error('❌ tutorialToGuidance runtime error:', chrome.runtime.lastError.message);
               window.OpheliaNotify?.(`Ophelia: ${chrome.runtime.lastError.message}`, 'error');
+              _clearDotLabel();
               return;
             }
             if (res?.error) {
+              console.error('❌ tutorialToGuidance error:', res.error);
               window.OpheliaNotify?.(res.error, 'error');
+              _clearDotLabel();
             } else if (res?.notionPageUrl) {
+              console.log('✅ tutorialToGuidance success:', res.notionPageUrl);
               window.OpheliaNotify?.(
                 `Notion plan ready (${res.stepCount || 0} steps):\n${res.notionPageUrl}`,
                 'success'
               );
+              _clearDotLabel();
+            } else {
+              console.warn('⚠️ tutorialToGuidance: empty response payload');
+              window.OpheliaNotify?.('Ophelia: no response from tutorial pipeline.', 'warning');
+              _clearDotLabel();
             }
           }
         );
+      } else {
+        console.log('ℹ️ Ophelia intent not matched for tutorial pipeline:', transcript);
+        window.OpheliaNotify?.(
+          'Intent not matched. Say: "tutorial to guidance".',
+          'info'
+        );
+        _clearDotLabel();
       }
 
       // Capture screenshot alongside the transcript for other flows
