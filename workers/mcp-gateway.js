@@ -150,7 +150,7 @@ async function handleTutorialToGuidance(body, env, request) {
     transcript = transcript.slice(0, TRANSCRIPT_MAX_CHARS) + '\n…[truncated]';
   }
 
-  const claudeUrl = env.CLAUDE_WORKER_URL || DEFAULT_CLAUDE_WORKER;
+  const claudeUrl = normalizeClaudeUrl(env.CLAUDE_WORKER_URL || DEFAULT_CLAUDE_WORKER);
   const steps = await callClaudeForPlan({
     claudeUrl,
     userContext,
@@ -214,7 +214,7 @@ async function callClaudeForPlan({
     `Transcript status: ${transcriptStatus}\n\n` +
     `Transcript:\n${transcript || '(no transcript available — infer from title/description)'}`;
 
-  const res = await fetch(claudeUrl, {
+  let res = await fetch(claudeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -225,6 +225,20 @@ async function callClaudeForPlan({
     })
   });
 
+  // If custom CLAUDE_WORKER_URL is misconfigured, retry once with default.
+  if (!res.ok && res.status === 404 && claudeUrl !== normalizeClaudeUrl(DEFAULT_CLAUDE_WORKER)) {
+    res = await fetch(normalizeClaudeUrl(DEFAULT_CLAUDE_WORKER), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 8192,
+        system: BRAIN_SYSTEM,
+        messages: [{ role: 'user', content: userBlock }]
+      })
+    });
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(`Claude proxy failed: ${res.status} ${JSON.stringify(err)}`);
@@ -234,6 +248,13 @@ async function callClaudeForPlan({
   const text = data.content?.find((b) => b.type === 'text')?.text || '';
   const steps = parseBrainStepsJson(text);
   return steps;
+}
+
+function normalizeClaudeUrl(raw) {
+  const u = new URL(String(raw));
+  // Always target the Claude route on the worker.
+  if (!u.pathname.endsWith('/claude')) u.pathname = '/claude';
+  return u.toString();
 }
 
 function parseBrainStepsJson(text) {

@@ -101,6 +101,39 @@
       e.preventDefault();
       e.stopPropagation();
       window.OpheliaAssistant?.activate();
+      return;
+    }
+
+    // Temporary bypass: Ctrl+Shift+U directly triggers tutorial->guidance pipeline
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyU' && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.OpheliaNotify('Running tutorial -> guidance…', 'info');
+      chrome.runtime.sendMessage(
+        {
+          action: 'tutorialToGuidance',
+          userContext: 'Triggered from keyboard shortcut (temporary bypass)',
+          speechTranscript: 'Ctrl+Shift+U shortcut trigger'
+        },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            window.OpheliaNotify(`Ophelia: ${chrome.runtime.lastError.message}`, 'error');
+            return;
+          }
+          if (res?.error) {
+            window.OpheliaNotify(res.error, 'error');
+            return;
+          }
+          if (res?.notionPageUrl) {
+            window.OpheliaNotify(
+              `Notion plan ready (${res.stepCount || 0} steps):\n${res.notionPageUrl}`,
+              'success'
+            );
+            return;
+          }
+          window.OpheliaNotify('Ophelia: no response from tutorial pipeline.', 'warning');
+        }
+      );
     }
   }, true); // capture phase so it fires before page handlers
 

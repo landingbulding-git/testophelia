@@ -90,7 +90,31 @@ export async function fetchYouTubeVideoContent({ url, includeTranscript = true }
       'User-Agent': 'Mozilla/5.0 (compatible; OpheliaMCP/1.0)'
     }
   });
-  if (!pageRes.ok) throw new Error(`YouTube page fetch failed (${pageRes.status})`);
+  if (!pageRes.ok) {
+    // Fallback path for 429/anti-bot responses:
+    // return metadata from oEmbed and continue pipeline with transcript unavailable.
+    const oembed = await fetchYouTubeOEmbed(watchUrl);
+    if (oembed) {
+      return {
+        platform: 'youtube.com',
+        videoId,
+        url: watchUrl,
+        title: oembed.title || null,
+        description: null,
+        channelTitle: oembed.author_name || null,
+        channelId: null,
+        lengthSeconds: null,
+        viewCount: null,
+        publishDate: null,
+        isLive: false,
+        keywords: [],
+        transcriptLanguage: null,
+        transcriptStatus: `unavailable_http_${pageRes.status}`,
+        transcript: null
+      };
+    }
+    throw new Error(`YouTube page fetch failed (${pageRes.status})`);
+  }
 
   const html = await pageRes.text();
   const player = extractInitialPlayerResponse(html);
@@ -133,4 +157,15 @@ export async function fetchYouTubeVideoContent({ url, includeTranscript = true }
     transcriptStatus: 'ok',
     transcript: parseYouTubeTranscriptXml(transcriptXml)
   };
+}
+
+async function fetchYouTubeOEmbed(watchUrl) {
+  try {
+    const endpoint = `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`;
+    const res = await fetch(endpoint);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (_) {
+    return null;
+  }
 }
