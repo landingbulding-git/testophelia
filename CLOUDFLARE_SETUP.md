@@ -163,3 +163,51 @@ Cloudflare Workers Free Tier:
 - Sufficient for most Chrome extension use cases
 
 Paid plans available if you need higher limits.
+
+---
+
+## Step 10: MCP Gateway — YouTube to Notion “Brain”
+
+The MCP gateway worker ([`workers/mcp-gateway.js`](workers/mcp-gateway.js)) exposes `POST /tutorial-to-guidance`, which:
+
+1. Fetches YouTube metadata and transcript (shared module [`workers/youtube-fetch.js`](workers/youtube-fetch.js)).
+2. Calls your existing **ophelia-gemini-worker** `POST /claude` (Anthropic) with the Brain prompt to produce JSON steps.
+3. Creates a **Notion** child page under a configured parent, then an inline database (Name, Details, Category, Status), then one row per step ([`workers/notion-client.js`](workers/notion-client.js)).
+
+### 10a. Create a Notion internal integration
+
+1. Open [My integrations](https://www.notion.so/my-integrations) → **New integration**.
+2. Type: **Internal**, associated with the workspace where plans should be created.
+3. Copy the **Internal Integration Secret** (this is `NOTION_INTEGRATION_TOKEN`).
+
+### 10b. Parent page
+
+1. In Notion, create or pick a page (e.g. “Ophelia imports”).
+2. Open it in the browser, copy the page ID from the URL (32 hex characters, with or without hyphens).
+3. On that page: **…** → **Connections** → connect your new integration so it can add child pages.
+
+Set `NOTION_PARENT_PAGE_ID` to that UUID (with hyphens, e.g. `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+
+### 10c. Gateway secrets and deploy
+
+From the repo `workers` directory:
+
+```bash
+cd /Users/mac/Documents/Ophelia/workers
+wrangler secret put NOTION_INTEGRATION_TOKEN --config mcp-gateway.wrangler.toml
+wrangler secret put NOTION_PARENT_PAGE_ID --config mcp-gateway.wrangler.toml
+wrangler deploy --config mcp-gateway.wrangler.toml
+```
+
+The **Gemini worker** must already have `ANTHROPIC_API_KEY` (see Step 7) so `/claude` works. Optionally set **Variable** `CLAUDE_WORKER_URL` on the MCP gateway to override the default Claude proxy URL.
+
+### 10d. Board view and “one In Progress” rule
+
+- **Board view:** The Notion Public API creates the database and rows but does **not** reliably create a board layout grouped by **Status**. After import, open the embedded database → **Layout** → **Board** → **Group** → **Status** once per database.
+- **One In Progress:** Notion does not enforce this automatically. The Brain page includes a reminder; future automation could use webhooks or a small sync job.
+
+### 10e. Extension behavior
+
+With the active tab on a **YouTube** watch URL, Shorts, or `youtu.be`, press the assistant shortcut and say a phrase that includes both **tutorial** and **guidance** (e.g. “tutorial to guidance”). The background script calls `POST {MCP_GATEWAY}/tutorial-to-guidance` and shows the Notion page link in a toast.
+
+**Rate limit:** the gateway allows up to **30** `tutorial-to-guidance` requests per client IP per day (KV-backed), in addition to normal MCP caching.

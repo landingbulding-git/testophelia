@@ -1,10 +1,9 @@
 // Ophelia Recorder - Cross-page session recording with rolling speech buffer
 // Each click immediately produces a self-contained step: element info + speech at that moment.
-// Gemini is only used AFTER recording to polish the raw speech into clean instructions.
+// AI post-processing is disabled in this baseline build.
 window.OpheliaRecorder = (() => {
   const REC_KEY   = 'opheliaRecording';
   const FB_WORKER = 'https://ophelia-firebase-worker.norbertb-consulting.workers.dev';
-  const GM_WORKER = 'https://ophelia-gemini-worker.norbertb-consulting.workers.dev';
 
   let _state = { active: false, steps: [], startingUrl: null, startTime: null, sessionId: null };
   let _clickListener = null;
@@ -213,11 +212,11 @@ window.OpheliaRecorder = (() => {
       return;
     }
 
-    notify(`Processing ${snap.steps.length} steps with AI…`, 'info');
+    notify(`Finalizing ${snap.steps.length} recorded steps…`, 'info');
     console.log(`⏹️ Recording stopped: ${snap.steps.length} steps`);
 
     try {
-      snap.steps = await polishInstructions(snap.steps);
+      snap.steps = attachFallbackInstructions(snap.steps);
       await saveToFirebase(snap);
 
       const tutorialUrl = `https://testophelia.vercel.app/tutorial.html?id=${snap.sessionId}`;
@@ -231,68 +230,12 @@ window.OpheliaRecorder = (() => {
     }
   }
 
-  // ── Gemini instruction polishing ──────────────────────────────────────────
-  // Only job: turn raw speech + element name into a clean one-sentence instruction.
-
-  async function polishInstructions(steps) {
-    const lines = steps.map((s, i) => {
-      const el = s.element;
-      const parts = [
-        `tag=${el.tag}`,
-        el.role          ? `role=${el.role}`              : null,
-        el.aria_label    ? `aria-label="${el.aria_label}"` : null,
-        el.text_content  ? `text="${el.text_content}"`     : null,
-        el.screen_region ? `position=${el.screen_region}`  : null
-      ].filter(Boolean).join(', ');
-      return (
-        `Step ${i + 1}:\n` +
-        `  Page URL : ${s.url}\n` +
-        `  Element  : ${parts}\n` +
-        `  User said: "${s.raw_instruction || '(silent)'}"` 
-      );
-    }).join('\n\n');
-
-    const prompt =
-      `You are writing step-by-step tutorial instructions for a Chrome extension that guides users through websites.\n` +
-      `Each step is one recorded click. Use the element details and what the user said to write ONE concise, ` +
-      `friendly, specific sentence telling the user exactly what to click and roughly where it is on the page.\n` +
-      `Examples of good instructions:\n` +
-      `- "Click your profile picture in the top-right corner"\n` +
-      `- "Select 'Settings' from the dropdown menu"\n` +
-      `- "Click the Notifications toggle to turn it on"\n\n` +
-      `Return ONLY a valid JSON array of strings — one per step, same order. No markdown, no extra text.\n\n` +
-      `Recorded steps:\n${lines}`;
-
-    try {
-      const res = await fetch(GM_WORKER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 1024 }
-        })
-      });
-
-      if (!res.ok) throw new Error(`Gemini responded with ${res.status}`);
-
-      const data  = await res.json();
-      const raw   = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const arr   = JSON.parse(clean);
-
-      if (Array.isArray(arr) && arr.length === steps.length) {
-        console.log('✅ Instructions polished by Gemini');
-        return steps.map((s, i) => ({ ...s, instruction: arr[i] }));
-      }
-      throw new Error('Response length mismatch');
-
-    } catch (e) {
-      console.warn('⚠️ Gemini polishing failed, using fallback:', e.message);
-      return steps.map(s => ({
-        ...s,
-        instruction: s.raw_instruction || `Click on "${s.element.label}"`
-      }));
-    }
+  // ── Deterministic instruction fallback (no AI calls) ─────────────────────
+  function attachFallbackInstructions(steps) {
+    return steps.map((s) => ({
+      ...s,
+      instruction: s.raw_instruction || `Click on "${s.element.label}"`
+    }));
   }
 
   // ── Firebase save ─────────────────────────────────────────────────────────

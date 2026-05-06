@@ -24,9 +24,6 @@
     {
       "matches": ["<all_urls>"],
       "js": [
-        "src/ai/gemini-config.js",
-        "src/ai/agent-prompt.js",
-        "src/ai/gemini-tutor.js",
         "src/content/overlay.js",
         "src/content/recorder.js",
         "src/content/player.js",
@@ -39,10 +36,10 @@
   "commands": {
     "toggle-sphere": {
       "suggested_key": {
-        "default": "Ctrl+Shift+U",
-        "mac": "MacCtrl+Shift+U"
+        "default": "Ctrl+Space",
+        "mac": "MacCtrl+Space"
       },
-      "description": "Toggle cross-tab sphere"
+      "description": "Toggle Ophelia assistant"
     },
     "send-firebase": {
       "suggested_key": {
