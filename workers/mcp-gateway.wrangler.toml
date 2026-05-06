@@ -2,6 +2,12 @@ name = "ophelia-mcp-gateway"
 main = "mcp-gateway.js"
 compatibility_date = "2024-01-01"
 
+# Secrets (wrangler secret put …):
+#   NOTION_INTEGRATION_TOKEN — Notion internal integration bearer token
+#   NOTION_PARENT_PAGE_ID    — UUID of the parent page (integration must have access)
+# Optional vars (Dashboard → Variables):
+#   CLAUDE_WORKER_URL — defaults to ophelia-gemini-worker …/claude if unset
+
 [observability]
 [observability.logs]
 enabled = true

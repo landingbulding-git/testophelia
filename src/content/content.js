@@ -5,12 +5,7 @@
   let recognition           = null;
   let sttActive             = false;
   let isListening           = false;
-  let _justStoppedRecording = false; // grace-period flag to silence tutor TTS
 
-  // ── Gemini tutor state ───────────────────────────────────────────────────
-  let geminiConfig = null;
-  let geminiTutor  = null;
-  let tutorEnabled = false;
 
   // ── Notification system (exposed globally for recorder.js and player.js) ──
 
@@ -72,8 +67,6 @@
         if (window.OpheliaRecorder.isActive()) {
           stopSTT();
           window.OpheliaRecorder.stop();
-          _justStoppedRecording = true;
-          setTimeout(() => { _justStoppedRecording = false; }, 3000);
         } else {
           window.OpheliaRecorder.start();
           startSTT(); // Mic on for speech → attached to each step
@@ -93,18 +86,6 @@
         });
         break;
 
-      case 'getAriaTree':
-        sendResponse(window.OpheliaAssistant?.getAriaTree?.() || null);
-        break;
-
-      case 'inspectElement':
-        sendResponse(window.OpheliaAssistant?.inspectElement?.(msg.hint) || null);
-        break;
-
-      case 'earlyInstruction':
-        window.OpheliaAssistant?.earlyInstruction?.(msg.instruction);
-        sendResponse({ ok: true });
-        break;
     }
     return true;
   });
@@ -134,9 +115,7 @@
   function init() {
     if (document.getElementById('cross-tab-sphere')) return;
     createSphere();
-    initGeminiTutor();
-    // Check for a resumable session from a previous page (800ms delay lets all scripts load)
-    setTimeout(() => window.OpheliaAssistant?.checkResume(), 800);
+    // Lean base mode: no AI tutor init here.
   }
 
   // ── Sphere ────────────────────────────────────────────────────────────────
@@ -170,8 +149,6 @@
     if (window.OpheliaRecorder.isActive()) {
       stopSTT();
       window.OpheliaRecorder.stop();
-      _justStoppedRecording = true;
-      setTimeout(() => { _justStoppedRecording = false; }, 3000);
       return;
     }
     window.OpheliaAssistant?.activate();
@@ -214,7 +191,7 @@
     })();
   }
 
-  // ── STT — dual purpose: feeds recorder buffer AND conversational AI ───────
+  // ── STT — feeds recorder speech buffer only ───────────────────────────────
 
   function startSTT() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -274,48 +251,7 @@
     sttActive = isListening = false;
   }
 
-  // ── Gemini tutor (conversational AI — not used during recording) ──────────
-
-  async function initGeminiTutor() {
-    try {
-      geminiConfig = new GeminiConfig();
-      await geminiConfig.initialize();
-      if (geminiConfig.isConfigured) {
-        geminiTutor = new GeminiTutor(geminiConfig);
-        await geminiTutor.initialize();
-        geminiTutor.loadHistoryFromStorage();
-        tutorEnabled = true;
-        console.log('✅ Gemini Tutor ready');
-      }
-    } catch (e) {
-      console.error('❌ Gemini Tutor init failed:', e);
-    }
-  }
-
-  async function sendToTutor(text) {
-    if (!tutorEnabled || !geminiTutor) return;
-    try {
-      window.OpheliaNotify('Thinking…', 'info');
-      const response = await geminiTutor.getTutoringResponse(text);
-      window.OpheliaNotify(`🤖 ${response}`, 'success');
-      speakResponse(response);
-    } catch (e) {
-      console.error('❌ Tutor error:', e);
-      window.OpheliaNotify(`AI error: ${e.message}`, 'error');
-    }
-  }
-
-  function speakResponse(text) {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utt    = new SpeechSynthesisUtterance(text.substring(0, 300));
-    utt.rate     = 1.0;
-    utt.pitch    = 1.0;
-    utt.volume   = 0.9;
-    window.speechSynthesis.speak(utt);
-  }
-
-  // ── scanDOM exposed for legacy/Gemini tutor context ───────────────────────
+  // ── scanDOM exposed for recorder and future reconnects ─────────────────────
   window.scanDOM = () => {
     const elements = [];
     const seen     = new Set();
