@@ -1,14 +1,10 @@
 // Ophelia Popup Controller
 document.addEventListener('DOMContentLoaded', async () => {
-  const btnStart    = document.getElementById('btnStart');
-  const btnStop     = document.getElementById('btnStop');
-  const recDot      = document.getElementById('recDot');
-  const recText     = document.getElementById('recText');
-  const stepCount   = document.getElementById('stepCount');
-  const linkSection = document.getElementById('linkSection');
-  const linkUrl     = document.getElementById('linkUrl');
-  const btnCopy     = document.getElementById('btnCopy');
-  const ttsSlider   = document.getElementById('ttsRate');
+  const btnCreateGuide = document.getElementById('btnCreateGuide');
+  const btnStopGuide   = document.getElementById('btnStopGuide');
+  const guideList      = document.getElementById('guideList');
+  const guideLinkInput = document.getElementById('guideLinkInput');
+  const guideLinkGo    = document.getElementById('guideLinkGo');
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -28,70 +24,115 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // ── Refresh UI from content script state ─────────────────────────────────
+  // ── Active Guide Check ──────────────────────────────────────────────────
 
-  async function refresh() {
-    const state = await sendToTab('getRecordingState');
-
-    if (state?.active) {
-      recDot.classList.add('active');
-      recText.innerHTML = `<strong>Recording…</strong>`;
-      stepCount.textContent = `${state.stepCount} step${state.stepCount !== 1 ? 's' : ''}`;
-      btnStart.classList.add('hidden');
-      btnStop.classList.remove('hidden');
+  async function checkActiveGuide() {
+    const state = await sendToTab('getGuideState');
+    if (state?.playing) {
+      btnStopGuide.classList.remove('hidden');
     } else {
-      recDot.classList.remove('active');
-      recText.textContent = 'Not recording';
-      stepCount.textContent = '';
-      btnStart.classList.remove('hidden');
-      btnStop.classList.add('hidden');
-    }
-
-    // Show last tutorial URL if available
-    const stored = await chrome.storage.local.get(['opheliaLastTutorialUrl']);
-    if (stored.opheliaLastTutorialUrl) {
-      linkUrl.textContent = stored.opheliaLastTutorialUrl;
-      linkSection.classList.remove('hidden');
+      btnStopGuide.classList.add('hidden');
     }
   }
 
-  // ── Button handlers ───────────────────────────────────────────────────────
-
-  btnStart.addEventListener('click', async () => {
-    await sendToTab('toggleRecording');
-    // Brief delay to let content script update state, then re-poll
-    setTimeout(refresh, 400);
+  btnStopGuide.addEventListener('click', async () => {
+    await sendToTab('stopGuide');
+    btnStopGuide.classList.add('hidden');
+    window.close();
   });
 
-  btnStop.addEventListener('click', async () => {
-    await sendToTab('toggleRecording');
-    setTimeout(refresh, 600);
+  // ── Create Guide ──────────────────────────────────────────────────────────
+
+  btnCreateGuide.addEventListener('click', async () => {
+    await sendToTab('startCreatorMode');
+    window.close();
   });
 
-  btnCopy.addEventListener('click', async () => {
-    const url = linkUrl.textContent.trim();
-    if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-      btnCopy.textContent = 'Copied!';
-      setTimeout(() => { btnCopy.textContent = 'Copy link'; }, 2000);
-    } catch (_) {
-      btnCopy.textContent = 'Failed';
+  // ── My Guides ─────────────────────────────────────────────────────────────
+
+  async function loadGuides() {
+    const tab = await getActiveTab();
+    if (!tab?.url) return;
+    const domain = new URL(tab.url).hostname;
+    const stored = await chrome.storage.local.get(['opheliaGuides']);
+    const guides = (stored.opheliaGuides || {})[domain] || [];
+
+    guideList.innerHTML = '';
+    if (guides.length === 0) {
+      guideList.innerHTML = '<div style="color:#555;font-size:11px;">No guides saved for this site yet.</div>';
+      return;
     }
+
+    guides.slice().reverse().forEach(g => {
+      const item = document.createElement('div');
+      item.className = 'guide-item';
+
+      const name = document.createElement('div');
+      name.className = 'guide-item-name';
+      name.title = g.name;
+      name.textContent = g.name;
+
+      const steps = document.createElement('div');
+      steps.className = 'guide-item-steps';
+      steps.textContent = `${g.stepCount} steps`;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'guide-item-copy';
+      copyBtn.textContent = 'Link';
+      copyBtn.title = g.shareUrl;
+      copyBtn.onclick = async () => {
+        await navigator.clipboard.writeText(g.shareUrl);
+        copyBtn.textContent = '✓';
+        setTimeout(() => { copyBtn.textContent = 'Link'; }, 1500);
+      };
+
+      const playBtn = document.createElement('button');
+      playBtn.className = 'guide-item-play';
+      playBtn.textContent = '▶';
+      playBtn.onclick = async () => {
+        await sendToTab('startGuide', { guideId: g.id });
+        window.close();
+      };
+
+      item.appendChild(name);
+      item.appendChild(steps);
+      item.appendChild(copyBtn);
+      item.appendChild(playBtn);
+      guideList.appendChild(item);
+    });
+  }
+
+  // ── Paste a link ──────────────────────────────────────────────────────────
+
+  function extractGuideId(value) {
+    const trimmed = value.trim();
+    
+    // 1. Try to extract from a query parameter (e.g. ?opheliaGuide=123-abc...)
+    try {
+      const url = new URL(trimmed);
+      const idParam = url.searchParams.get('opheliaGuide');
+      if (idParam && /^[0-9a-f-]{36}$/i.test(idParam)) return idParam;
+    } catch (_) {} // Ignore URL parsing errors for bare strings
+
+    // 2. Look for any valid 36-character UUID anywhere in the string
+    const match = trimmed.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    if (match) return match[1];
+
+    return null;
+  }
+
+  guideLinkGo.addEventListener('click', async () => {
+    const id = extractGuideId(guideLinkInput.value);
+    if (!id) { guideLinkInput.style.borderColor = '#ff4444'; setTimeout(() => { guideLinkInput.style.borderColor = ''; }, 1500); return; }
+    await sendToTab('startGuide', { guideId: id });
+    window.close();
   });
 
-  // ── Poll while popup is open (recording step count updates) ──────────────
-
-  // ── TTS rate slider ───────────────────────────────────────────────────────
-  const { ttsRate } = await chrome.storage.sync.get('ttsRate');
-  if (typeof ttsRate === 'number') ttsSlider.value = ttsRate;
-
-  ttsSlider.addEventListener('input', () => {
-    chrome.storage.sync.set({ ttsRate: parseFloat(ttsSlider.value) });
+  guideLinkInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') guideLinkGo.click();
   });
 
-  await refresh();
-  const poll = setInterval(refresh, 1500);
-  window.addEventListener('unload', () => clearInterval(poll));
+  await loadGuides();
+  await checkActiveGuide();
 });
 

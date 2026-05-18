@@ -1,10 +1,20 @@
 name = "ophelia-gemini-worker"
-main = "gemini.js"
+main = "ophelia.js"
 compatibility_date = "2024-01-01"
 
 [vars]
 # Environment variables will be set in Cloudflare dashboard
 # GEMINI_API_KEY = "your-gemini-api-key"
+
+# Secrets — set via: wrangler secret put <NAME>
+# ANTHROPIC_API_KEY     — Claude API key  (/claude, /computer-use, /think)
+# ELEVENLABS_API_KEY    — ElevenLabs key  (/tts)
+# ELEVENLABS_VOICE_ID   — ElevenLabs voice ID, e.g. "21m00Tcm4TlvDq8ikWAM" (Rachel)
+# ASSEMBLYAI_API_KEY    — AssemblyAI key  (/transcribe-token)
+
+[[kv_namespaces]]
+binding = "GUIDES"
+id = "050372be9f1843b3adf9158780581cab"
 
 [observability]
 [observability.logs]

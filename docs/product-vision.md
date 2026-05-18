@@ -1,399 +1,180 @@
-# Ophelia — Product Vision & Rebuild Plan
+# Ophelia — Product Vision
 
-> **Status:** Phases 1–4C implemented. Core AI assistant still unreliable and slow in practice.
-> This document diagnoses why, defines what Ophelia must become, and lays out the build plan.
-
----
-
-## Why Ophelia Fails Today
-
-### 1. The AI is guessing, not knowing
-
-Claude receives a screenshot + a list of 40 DOM elements and invents the next step from scratch on every click. It has no reliable knowledge of how Facebook, Bubble.io, or Zoho CRM actually work. The static `PLATFORM_KB` (4C) is a band-aid — 5 bullet points cannot replace real documentation.
-
-**Result:** Claude confidently hallucinates element targets, especially on complex SPAs, React apps, or tools with non-standard DOM structures.
-
-### 2. Element targeting is heuristic, not deterministic
-
-`_findEl` scores DOM elements based on aria-label fuzzy matches. When the label doesn't exist, or the element is inside a shadow root, or the app renders differently per user — the match fails silently.
-
-**Result:** The orange dot appears on the wrong element or nothing at all. The user clicks the wrong thing. Claude can't recover.
-
-### 3. 4B broke streaming TTS
-
-Switching `_handleAnalyze` to non-streaming tool-use removed the streaming pipeline. Claude now has to complete its FULL response (including any tool rounds) before the first word reaches TTS. This added 3–6 seconds of silence per step.
-
-**Result:** Ophelia feels slower after 4B than before it.
-
-### 4. The rate limiter is too aggressive
-
-`MIN_CALL_GAP_MS = 2000` adds a guaranteed 2s pause before every Claude call. Combined with Claude's latency (~1.5s for Sonnet), each step takes 3.5s minimum. With tool-use, up to 8–10s.
-
-**Result:** Ophelia feels painful to use even when it's working correctly.
-
-### 5. No verification → no error recovery
-
-After Claude says "click the Save button" and the user clicks it, Ophelia immediately calls Claude again without checking if anything happened. If the click was wrong (wrong element, wrong state), Ophelia ploughs on generating a sequence of wrong steps.
-
-**Result:** Errors compound. The session quickly becomes useless.
+> **Status:** Core guide Creator → Playback loop implemented. AI co-pilot (Claude + vision) operational. Next: distraction detection, guide-aware co-pilot in player, multi-tab creator stability.
 
 ---
 
-## What Ophelia Must Become
+## What Ophelia Is
 
-### Product A — AI-Guided Assistant (ask anything, anywhere)
+One product. Two roles.
 
-> "Help me set up a Zoho CRM pipeline from scratch" → Ophelia walks the user through it, step by step, on their live browser, without ever getting confused.
+**For creators** — record a complete guide once (across as many tabs and clicks as needed), share a link. Clients, employees, or teams follow it with 100% accuracy on their own screen.
 
-Requirements:
-- Guides complex multi-step workflows on specialized tools (Bubble.io, Suno, Zoho, Webflow, Notion, etc.)
-- Knows the actual interface of these apps — not from a screenshot, but from real documentation
-- Responds in under 2 seconds per step
-- Recovers when a step fails instead of getting stuck
-- Works on the user's own live session (logged-in state, real data)
-
-### Product B — Pre-taught Tutorials (record once, play for everyone)
-
-> Creator records "How to create a campaign in Mailchimp" → 10,000 users play it with 100% accuracy, each step highlighted precisely on their screen.
-
-Requirements:
-- One-click recording that captures robust element fingerprints
-- YouTube video → tutorial draft (AI extracts steps from transcript)
-- Shareable link that works for any user on any account
-- Self-healing when site UI changes (multi-signal fallback)
-- Overlay card with step number, instruction, and highlighted element
+**For users** — follow the guide step by step with highlighted elements and spoken narration. If something goes wrong, one shortcut summons the AI. It knows exactly where you are in the guide and helps you get unstuck, then continues.
 
 ---
 
-## Architecture: How We Get There
+## Creator Mode
 
-### MCP Strategy — Connect to Existing MCPs, Don't Build a Knowledge Database
+**Goal:** Record complex, multi-tab guides without friction.
 
-Bubble.io, Zoho CRM, Notion, Airtable, Suno, and the vast majority of target platforms already publish official MCP servers. **We connect to them. We don't rebuild what they've already built.**
+**How it works:**
+- Creator clicks "Create Guide" in the popup → `CreatorLayer` mounts on the page
+- Every click is intercepted: confirm overlay → fingerprint + screenshot captured → Claude generates narration asynchronously
+- Recording persists across tab navigation and page loads via `opheliaCreatorSession` storage
+- Sphere click to finish → wait for pending narrations → name + save dialog → `POST /guide` to Cloudflare KV → shareable link
 
-Ophelia's background service worker is the **MCP client**. A single Cloudflare Worker acts as the **MCP Gateway** — it manages auth tokens, handles CORS, and proxies tool calls to each platform's official MCP server. Claude calls `call_platform_tool(tool, input)` and gets back real, up-to-date documentation and capabilities directly from the platform.
+**Step types:**
 
-No local servers. No Playwright. No manual knowledge database. Works as a pure browser extension.
-
-```
-User speaks goal
-       │
-       ▼
-Detect platform from URL → look up MCP registry
-       │
-       ▼
-plan_session (SW → Claude Haiku + platform MCP context)
-  generates a plan grounded in real app knowledge
-       │
-       ▼
-Per step: _handleAnalyze (SW → Claude Sonnet, streaming)
-  ┌──────────────────────────────────────────────┐
-  │  Claude can call:                            │
-  │  • call_platform_tool(tool, input)           │ ← MCP Gateway → platform's official MCP
-  │  • get_accessibility_tree()                  │ ← content script (ARIA rescan)
-  │  • inspect_element(hint)                     │ ← content script (form state)
-  │  • think_deeply(goal, context)               │ ← Sequential Thinking MCP (CF Worker)
-  └──────────────────────────────────────────────┘
-       │
-       ▼
-Instruction streams to TTS immediately (first word <500ms)
-Element found via ARIA/selector → visual fallback only if needed
-       │
-       ▼
-After user clicks: verify DOM changed (Haiku, <200ms)
-If not: Claude calls inspect_element → explains why → user unblocked
-```
-
-### MCP Registry (in background.js)
-
-```javascript
-const MCP_REGISTRY = {
-  'bubble.io':       'https://mcp.bubble.io',
-  'zoho.com':        'https://mcp.zoho.com',
-  'notion.com':      'https://mcp.notion.com',
-  'airtable.com':    'https://mcp.airtable.com',
-  'suno.com':        'https://mcp.suno.com',
-  'webflow.com':     'https://mcp.webflow.com',
-  'mailchimp.com':   'https://mcp.mailchimp.com',
-  'linear.app':      'https://mcp.linear.app',
-  'github.com':      'https://mcp.github.com',
-};
-```
-
-When a session starts, the platform is detected from `location.href` → the right MCP is selected → Claude has access to official tools for that platform.
-
----
-
-## Phase 5 — Fix What's Broken (Do This First)
-
-### 5A — Re-enable Streaming TTS
-
-**Problem:** 4B's tool-use loop broke streaming. Claude must finish all tool rounds before TTS gets any text.
-
-**Fix:** Two-path architecture in `_handleAnalyze`:
-- **Fast path (default):** streaming call with no tools. Pipe tokens directly to TTS. ~1.5s to first word.
-- **Tool path (on demand):** if Claude's text response contains a special marker (e.g. `{{NEEDS_TOOL}}`), or if the page is complex, switch to non-streaming tool-use.
-
-Better approach: stream first, tools second. Make the first call streaming. If the response is a valid JSON step — done. If the response says it's uncertain, THEN do a non-streaming tool-use follow-up.
-
-**Files:** `background.js` (`_handleAnalyze`), `assistant.js` (`_analyze`, `_onStep`)
-
----
-
-### 5B — Speed: Remove Rate Limit + Use Haiku for Verification
-
-**Remove:** `MIN_CALL_GAP_MS = 2000` entirely. Claude API handles rate limiting server-side.
-
-**Two models:**
-- `claude-haiku-4-5` (or `claude-3-haiku-20240307`): plan_session, verify_step, clarifyGoal, checkObstacle — sub-1s responses
-- `claude-sonnet-4-5`: _handleAnalyze main call only
-
-**Expected improvement:** from ~4s/step → ~1.5s/step
-
-**Files:** `background.js` (replace model constants, remove rate limit)
-
----
-
-### 5C — Step Verification (Did It Work?)
-
-After each user click, before calling Claude again, check if the DOM meaningfully changed:
-
-```javascript
-async function _verifyStepExecuted(beforeSnapshot, afterSnapshot) {
-  // Compare URL, title, key element counts, modal presence
-  // If unchanged after 1.5s → step may have failed
-  // → Claude gets a "step_failed: true" flag in next analyze call
-}
-```
-
-**If step failed:** Claude receives `{stepFailed: true, reason: "DOM unchanged after 1.5s"}` → Claude calls `inspect_element` → explains why → user gets actionable message.
-
-**Files:** `assistant.js` (capture DOM snapshot before click in `_watchPage`), `background.js` (flag in analyze message)
-
----
-
-## Phase 6 — Platform MCP Client (The Intelligence Gap)
-
-### The insight
-
-Bubble.io, Zoho, Notion, Airtable and most target platforms already publish official MCP servers. They contain real, up-to-date documentation, tool schemas, and API capabilities — maintained by the platform teams, not by us.
-
-**We build a universal MCP gateway, not a knowledge database.**
-
-### MCP Gateway Worker
-
-**New file:** `workers/mcp-gateway.js`
-
-```
-Responsibilities:
-  • Auth management — stores platform OAuth tokens per user
-  • MCP proxying — routes tool calls from extension → platform MCP server
-  • Response caching — Cloudflare KV, 15min TTL for repeated queries
-  • CORS handling — extensions can't call all MCPs directly
-
-Endpoints:
-  POST /call  → {platform, tool, input, userToken?}
-              → proxies to platform MCP → returns result
-
-  POST /list  → {platform}
-              → returns available tools for that platform
-
-  POST /auth  → {platform, code} (OAuth callback)
-              → stores token in KV
-```
-
-### Tool in `_handleAnalyze`
-
-```javascript
-{
-  name: 'call_platform_tool',
-  description: 'Call an official tool from the current platform\'s MCP server to get real documentation, available options, or platform-specific guidance.',
-  input_schema: {
-    tool:  { type: 'string', description: 'Tool name from the platform MCP (e.g. "search_docs", "list_templates")' },
-    input: { type: 'object', description: 'Tool input parameters' }
-  }
-}
-```
-
-### MCP-first planning
-
-When session starts on a known platform:
-1. Gateway fetches available tools from the platform MCP
-2. Claude receives tool list with descriptions
-3. `plan_session` and `_handleAnalyze` both have access to platform tools
-4. Claude calls `call_platform_tool("search_docs", {query: "create workflow"})` → gets real Bubble.io workflow docs
-5. No manual knowledge entry needed — ever
-
-### Priority platform MCPs to connect
-
-| Platform | MCP Available | Auth |
+| Type | Status | Description |
 |---|---|---|
-| **Bubble.io** | Yes | API key |
-| **Notion** | Yes (official) | OAuth |
-| **Airtable** | Yes (official) | OAuth / API key |
-| **Linear** | Yes (official) | OAuth |
-| **GitHub** | Yes (official) | OAuth |
-| **Zoho CRM** | Yes | OAuth |
-| **Webflow** | Yes | OAuth |
-| **Suno** | Verify | API key |
-| **Mailchimp** | Yes | OAuth |
+| `click` | ✅ Current | Highlight + spoken narration |
+| `video` | 🔜 Planned | Short inline clip (screen capture or webcam) plays instead of overlay card |
 
-This replaces the static `PLATFORM_KB` entirely — and updates itself automatically as platforms evolve.
+**Each step stores:**
+- Fingerprint: `{ tag, ariaLabel, text, selector, xpath, position }`
+- Screenshot (JPEG q=60)
+- AI-generated narration
+- `point: { x, y }` for overlay placement
 
 ---
 
-## Phase 7 — Tutorial System: 100% Accuracy
+## Player Mode
 
-### 7A — Robust Recording
+**Goal:** Users follow the guide with zero friction. The experience feels like a knowledgeable colleague walking them through it — one step at a time, precisely highlighted.
 
-Current recorder saves: `{aria_label, data_testid, css_selector, text_content, pos}`
+**Playback:**
+- Overlay card: step number, instruction text, highlighted target element
+- Spoken narration via TTS — brief, warm, natural
+- Auto-advances on the right click or URL change
+- Cross-tab resume: saves `opheliaGuidePending` before any navigation, resumes after page load
 
-Add:
-- `xpath` — absolute XPath as last-resort selector
-- `visual_description` — AI-generated visual description (e.g. "blue Save button in top-right toolbar") generated at record time
-- `computed_role` / `computed_label` — ARIA computed properties (from 4B)
-- `confidence_score` — how reliable each signal is (id > aria-label > testId > text > position)
+### Guide-Aware AI Co-Pilot
 
-**At record time:** AI annotates each step:
+The AI is not a separate tool — it lives inside the player. Users never leave the guide to ask for help.
+
+**Activation:** `Ctrl+Space` (or sphere click) while a guide is active
+
+**What it knows:**
+- The full guide: name, all steps, total count
+- The current step: instruction, target element description, step index
+- The live screen: screenshot captured at activation
+- Page context: current URL and title
+
+**What it can do:**
+- Answer questions about the current step: *"Why am I clicking this?"*, *"What does this field do?"*
+- Help unblock: *"The button isn't there — here's what to look for instead"*
+- Speak responses aloud — one or two sentences, never a list
+
+**After helping:** Ophelia offers to continue: *"Ready to go? I'll pick up from step 4."* User confirms → playback resumes automatically.
+
+### Distraction Detection
+
+While a guide is active, the player monitors whether the user is still engaged:
+
+- **Trigger:** user navigates to an unrelated domain, or is idle from the guide for ~2 minutes, or makes 3+ unrelated clicks
+- **Response:** Ophelia speaks gently — *"Looks like you wandered off — want to pause the guide or jump back in?"*
+- **Options:** Pause (saves step index to storage) · Continue (resumes immediately) · Dismiss
+
+---
+
+## Voice & Personality
+
+Ophelia speaks like an **exceptional customer success specialist**:
+
+- Talks at the right moment — not after every click
+- One or two sentences maximum
+- Plain English, no jargon
+- Warm, never robotic — confident, never apologetic
+- Never explains what the user just did; only what to do next
+
+---
+
+## Guide Data Shape
+
 ```json
 {
-  "step_number": 3,
-  "instruction": "Click the Workflow tab in the left sidebar",
-  "element": {
-    "aria_label": "Workflow",
-    "data_testid": null,
-    "css_selector": ".editor-sidebar [aria-label='Workflow']",
-    "xpath": "//nav[@class='editor-sidebar']//a[text()='Workflow']",
-    "visual_description": "Tab labeled 'Workflow' in the left sidebar, below 'Design'",
-    "confidence": "high"
-  }
+  "id": "uuid-v4",
+  "name": "How to set up your first campaign",
+  "domain": "mailchimp.com",
+  "createdAt": 1748000000,
+  "steps": [
+    {
+      "order": 0,
+      "type": "click",
+      "narration": "Hit the 'Create' button in the top right.",
+      "screenshot": "<base64-jpeg>",
+      "fingerprint": {
+        "tag": "button",
+        "ariaLabel": "Create",
+        "text": "Create",
+        "selector": ".nuni-button[aria-label='Create']",
+        "xpath": "//button[@aria-label='Create']",
+        "position": { "x": 1140, "y": 24 }
+      },
+      "point": { "x": 1140, "y": 24 }
+    },
+    {
+      "order": 1,
+      "type": "video",
+      "narration": "Watch how the campaign wizard works.",
+      "videoUrl": "https://worker.../clips/abc.mp4"
+    }
+  ]
 }
 ```
 
-### 7B — Sequential Thinking MCP (as Cloudflare Worker)
-
-**New file:** `workers/thinking-mcp.js`
-
-```
-POST /think
-
-Input: {goal, context, platform, currentState}
-Output: {reasoning, plan: [...steps], caveats: [...]}
-
-Internally: calls Claude with extended thinking enabled
-Cached: same goal+platform → return cached plan (Cloudflare KV, 1hr TTL)
-```
-
-Used for: complex goals like "set up a Zoho CRM pipeline" where planning requires deep reasoning before any execution.
-
-Cost: ~$0.015 per planning call. Cached → free for repeat goals.
-
-### 7C — YouTube Video → Tutorial
-
-**New page:** `testophelia.vercel.app/create`
-
-```
-1. Creator pastes YouTube URL
-2. Worker fetches video transcript (YouTube Data API or yt-dlp)
-3. Claude converts transcript to structured step list
-4. Creator opens the target site with Ophelia
-5. Ophelia enters "validation mode":
-   - Reads step 1 from the AI draft
-   - Asks creator: "Does this step look right? Click the element for step 1"
-   - Creator clicks → element fingerprint captured
-   - Repeat for all steps
-6. Validated tutorial saved with element fingerprints
-7. Shareable link generated
-```
-
-This gives us: AI-drafted steps (fast) + human-validated element targets (accurate) = 100% accuracy tutorials.
-
-**Transcript extraction:**
-- Option A: YouTube Data API (requires API key, captions only)
-- Option B: Cloudflare Worker calls `youtube-transcript-api` (npm) via Node.js compatibility
-- Option C: User pastes the transcript manually (simplest for v1)
-
 ---
 
-## Phase 8 — Creator Portal & Marketplace
-
-**`testophelia.vercel.app`** evolves from a landing page to a full creator portal:
+## Architecture
 
 ```
-/create          — YouTube URL → tutorial draft + validation flow
-/tutorials       — Browse published tutorials by platform
-/tutorial?id=X   — Tutorial player (existing)
-/dashboard       — Creator analytics (views, completion rate)
+CREATOR FLOW                        PLAYER FLOW
+──────────────────────────────────  ──────────────────────────────────
+Popup → "Create Guide"              Popup → "My Guides" / paste link
+CreatorLayer mounts                 GET /guide/:id  (Cloudflare KV)
+  ↳ click → screenshot → Claude        ↳ OpheliaPlayer.startGuide()
+  ↳ narration + fingerprint               ↳ for each step:
+  ↳ session persists across tabs             findElement (8-tier)
+Sphere click → finish                         overlay + narration
+POST /guide → KV → share link                 auto-advance
+                                         distraction monitor
+                                         Ctrl+Space → AI co-pilot
+                                           (guide-aware Claude call)
+                                         offer continue after help
 ```
 
-**Tutorial quality signals:**
-- Completion rate (did users reach the last step?)
-- Step failure rate per step (which steps fail most often?)
-- User corrections (automatically improves the tutorial over time)
+**Cloudflare Worker routes (`ophelia-gemini-worker`):**
 
----
-
-## Immediate Priorities (Next 5 Sessions)
-
-```
-Session 1  │ 5A: Re-enable streaming TTS in _handleAnalyze
-           │ 5B: Remove rate limit, add claude-haiku for fast calls
-
-Session 2  │ 5C: Step verification (DOM snapshot before/after click)
-           │     + "step failed" recovery flow
-
-Session 3  │ 6A: knowledge-mcp.js Cloudflare Worker skeleton
-           │     + Vectorize database setup
-           │     + search_knowledge tool in _handleAnalyze
-
-Session 4  │ 6B: Ingest documentation for Bubble.io + Zoho CRM
-           │     Test: "help me create a workflow in Bubble"
-
-Session 5  │ 7A: Enhanced recorder (xpath + visual_description + confidence)
-           │ 7B: thinking-mcp.js for complex planning
-```
-
----
-
-## MCP Summary Table
-
-| MCP | Type | Where | Solves |
-|---|---|---|---|
-| **Platform MCP Gateway** | CF Worker → official platform MCPs | Remote | AI doesn't know the app |
-| **Sequential Thinking MCP** | Cloudflare Worker | Remote | Complex multi-step planning |
-| **get_accessibility_tree** | Native (content script) | Local | Incomplete DOM list |
-| **inspect_element** | Native (content script) | Local | Disabled/blocked elements |
-| **plan_session** | Native (SW → Claude Haiku) | Local | Per-goal step coherence |
-| **verify_step** | Native (SW → Claude Haiku) | Local | Did the action work? |
-
-No local Node.js servers. No Playwright controlling a separate browser. Everything either native to the extension or a Cloudflare Worker. The user's real logged-in session is always used.
-
----
-
-## Cost Model (per 10-step session)
-
-| Today (4B) | After Phase 5–6 |
+| Route | Purpose |
 |---|---|
-| plan_session: $0.008 (Sonnet) | plan_session: $0.001 (Haiku) |
-| 10× analyze: $0.060 (Sonnet, non-streaming) | 10× analyze: $0.040 (Sonnet, streaming) |
-| Rate limit overhead: +5-10s silence | Rate limit: removed |
-| **Total: ~$0.068, ~5s/step** | Platform MCP calls: $0 (platform-provided) |
-| | **Total: ~$0.041, ~1.2s/step** |
-
-**40% cost reduction, 4× speed improvement** from phases 5–6 alone.
-
-Complex app session (Bubble.io, 20 steps):
-- Without platform MCP: high failure rate → useless
-- With platform MCP: ~$0.082 total + $0.015 thinking call = ~$0.097 per session, ~95% accuracy
-- Platform MCP tool calls: free (or included in platform subscription)
+| `POST /claude` | Stream Claude Sonnet — AI assistant + step narration |
+| `POST /tts` | ElevenLabs spoken narration |
+| `POST /transcribe-token` | AssemblyAI token for creator mic |
+| `POST /guide` | Save guide to KV; returns `{ id, shareUrl }` |
+| `GET /guide/:id` | Load guide from KV |
+| `POST /computer-use` | Pixel-precise element fallback (stub) |
 
 ---
 
-## Key Design Principles
+## What's Next
 
-1. **Knowledge first, DOM scanning second.** Claude should know the app before looking at any screenshot.
-2. **Stream everything.** First word to TTS in <500ms. Never make the user wait in silence.
-3. **Fail loudly, recover fast.** If a step fails, say why and how to fix it. Never silently move on.
-4. **Deterministic where possible, AI where necessary.** ARIA selectors > heuristics > screenshot. AI is the last resort, not the first.
-5. **Connect, don't build.** Every platform that has an official MCP — use it. Build our own only for what doesn't exist.
-6. **MCPs as remote knowledge, not remote control.** We don't hand off execution to an external tool. We give Claude better information to make better decisions — execution always stays in the extension.
+| Feature | Priority | Notes |
+|---|---|---|
+| Distraction detection + pause/resume prompt | High | Monitor URL changes + idle time during playback |
+| Guide-aware AI co-pilot in player | High | Inject guide + step index into Claude system prompt |
+| Multi-tab creator session stability | High | Session persistence works; needs stress testing |
+| Video step playback (`type: "video"`) | Medium | Inline `<video>` in overlay card |
+| Video step recording (`type: "video"`) | Medium | Screen Capture API; clip stored in CF R2 |
+| Creator step preview before save | Medium | Scrollable thumbnails + editable narration per step |
+| Guide versioning (overwrite) | Low | Pass existing ID to `POST /guide` |
+
+---
+
+## Core Design Principles
+
+1. **Guide-first, AI-on-demand.** The guide does 90% of the work. The AI steps in only when the user needs it.
+2. **Talk like a person, not a product.** One sentence, right timing, plain English.
+3. **Record everything, interrupt nothing.** Creator flow must be frictionless across tabs and navigations.
+4. **Accuracy over coverage.** 100% correct on supported steps beats 70% correct on all steps.
+5. **Context always travels with the player.** Guide plan, step index, and screen state are always available to the AI — no user ever has to re-explain what they're doing.
