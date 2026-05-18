@@ -33,13 +33,32 @@
       font-weight: 600;
       color: #fff;
     }
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-stop-guide {
+      background: #ea4335;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-stop-guide:hover { background: #d33426; }
+    .btn-stop-guide.hidden { display: none; }
     .header .subtitle {
       font-size: 11px;
       color: #888;
-      margin-left: auto;
     }
 
-    /* ── Recording section ────────────────────────────────────── */
     .section {
       padding: 16px 18px;
       border-bottom: 1px solid #1e1e1e;
@@ -52,34 +71,6 @@
       color: #666;
       margin-bottom: 12px;
     }
-
-    .rec-status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 12px;
-      min-height: 20px;
-    }
-    .rec-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #444;
-      flex-shrink: 0;
-      transition: background 0.3s;
-    }
-    .rec-dot.active {
-      background: #ff3333;
-      animation: blink 1s ease-in-out infinite;
-    }
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.3; }
-    }
-    .rec-text {
-      font-size: 12px;
-      color: #aaa;
-    }
-    .rec-text strong { color: #fff; }
 
     .btn {
       display: flex;
@@ -96,80 +87,6 @@
       transition: opacity 0.15s, transform 0.1s;
     }
     .btn:active { transform: scale(0.97); }
-
-    .btn-record {
-      background: #ff7a1a;
-      color: #fff;
-    }
-    .btn-record:hover { opacity: 0.9; }
-    .btn-stop {
-      background: #333;
-      color: #ff4444;
-      border: 1.5px solid #ff4444;
-    }
-    .btn-stop:hover { background: #3a1010; }
-
-    /* ── Tutorial link section ──────────────────────────────────── */
-    .link-box {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 10px 12px;
-    }
-    .link-label {
-      font-size: 10px;
-      color: #666;
-      margin-bottom: 4px;
-    }
-    .link-url {
-      font-size: 11px;
-      color: #ff7a1a;
-      word-break: break-all;
-      line-height: 1.4;
-      cursor: pointer;
-      text-decoration: underline;
-    }
-    .link-copy {
-      display: inline-block;
-      margin-top: 8px;
-      font-size: 11px;
-      color: #888;
-      cursor: pointer;
-      background: #222;
-      border: 1px solid #333;
-      border-radius: 4px;
-      padding: 3px 8px;
-    }
-    .link-copy:hover { color: #fff; }
-
-    /* ── Voice speed slider ─────────────────────────────── */
-    .speed-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .speed-label {
-      font-size: 11px;
-      color: #555;
-      white-space: nowrap;
-    }
-    .speed-slider {
-      -webkit-appearance: none;
-      flex: 1;
-      height: 3px;
-      border-radius: 2px;
-      background: #2a2a2a;
-      outline: none;
-      cursor: pointer;
-    }
-    .speed-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: #ff7a1a;
-      cursor: pointer;
-    }
 
     /* ── Info row ──────────────────────────────────────────────── */
     .info-row {
@@ -190,53 +107,125 @@
       color: #888;
     }
     .hidden { display: none !important; }
+
+    /* ── Guide section ─────────────────────────────────────────── */
+    .btn-guide {
+      background: #1a1a2e;
+      color: #ff7a1a;
+      border: 1.5px solid rgba(255,122,26,0.5);
+    }
+    .btn-guide:hover { background: #22223a; }
+
+    .guide-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+    .guide-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 7px;
+      padding: 8px 10px;
+    }
+    .guide-item-name {
+      flex: 1;
+      font-size: 12px;
+      color: #ccc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .guide-item-steps {
+      font-size: 10px;
+      color: #555;
+      white-space: nowrap;
+    }
+    .guide-item-play {
+      background: #ff7a1a;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .guide-item-copy {
+      background: #222;
+      color: #888;
+      border: 1px solid #333;
+      border-radius: 5px;
+      padding: 4px 8px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .guide-link-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .guide-link-input {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 7px 9px;
+      color: #ccc;
+      font-size: 11px;
+      outline: none;
+    }
+    .guide-link-input::placeholder { color: #444; }
+    .guide-link-go {
+      background: #ff7a1a;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="logo"></div>
     <h1>Ophelia</h1>
-    <span class="subtitle" id="stepCount"></span>
-  </div>
-
-  <!-- Recording -->
-  <div class="section">
-    <div class="section-label">Tutorial Recorder</div>
-    <div class="rec-status">
-      <div class="rec-dot" id="recDot"></div>
-      <span class="rec-text" id="recText">Not recording</span>
-    </div>
-    <button class="btn btn-record" id="btnStart">⏺ Start Recording</button>
-    <button class="btn btn-stop hidden" id="btnStop">⏹ Stop &amp; Save Tutorial</button>
-  </div>
-
-  <!-- Last tutorial link -->
-  <div class="section hidden" id="linkSection">
-    <div class="section-label">Last Tutorial</div>
-    <div class="link-box">
-      <div class="link-label">Share this link:</div>
-      <div class="link-url" id="linkUrl"></div>
-      <button class="link-copy" id="btnCopy">Copy link</button>
+    <div class="header-actions">
+      <button class="btn-stop-guide hidden" id="btnStopGuide">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        Stop Guide
+      </button>
     </div>
   </div>
 
-  <!-- Voice speed -->
+  <!-- Guide Creator -->
   <div class="section">
-    <div class="section-label">Voice Speed</div>
-    <div class="speed-row">
-      <span class="speed-label">Slow</span>
-      <input type="range" class="speed-slider" id="ttsRate"
-             min="0.7" max="1.8" step="0.1" value="1.05">
-      <span class="speed-label">Fast</span>
+    <div class="section-label">Guide Creator</div>
+    <button class="btn btn-guide" id="btnCreateGuide">✦ Create Guide</button>
+  </div>
+
+  <!-- My Guides -->
+  <div class="section" id="guidesSection">
+    <div class="section-label">My Guides</div>
+    <div class="guide-list" id="guideList">
+      <div style="color:#555;font-size:11px;">No guides saved for this site yet.</div>
+    </div>
+    <div class="guide-link-row">
+      <input class="guide-link-input" id="guideLinkInput" placeholder="Paste guide URL or ID…">
+      <button class="guide-link-go" id="guideLinkGo">▶</button>
     </div>
   </div>
 
   <!-- Keyboard hint -->
   <div class="info-row">
-    <kbd class="shortcut">Ctrl+Shift+F</kbd>
-    <span>toggles recording &nbsp;·&nbsp;</span>
     <kbd class="shortcut">Ctrl+Space</kbd>
-    <span>toggles assistant</span>
+    <span>toggles AI assistant</span>
   </div>
 
   <script src="popup.js"></script>

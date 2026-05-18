@@ -19,3 +19,7 @@ invocation_logs = true
 [[kv_namespaces]]
 binding = "MCP_CACHE"
 id = "4bd9453deb184ebfb59272bf9f5f832e"
+
+[[services]]
+binding = "GEMINI_PROXY"
+service = "ophelia-gemini-worker"

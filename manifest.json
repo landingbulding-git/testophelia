@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Cross-Tab Utility",
+  "name": "Ophelia",
   "version": "1.0.0",
-  "description": "Ophelia — Record and share guided web tutorials with voice narration",
+  "description": "Ophelia — Create and play guided web tutorials with AI narration",
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_title": "Ophelia"
@@ -25,7 +25,6 @@
       "matches": ["<all_urls>"],
       "js": [
         "src/content/overlay.js",
-        "src/content/recorder.js",
         "src/content/player.js",
         "src/content/assistant.js",
         "src/content/content.js"
@@ -46,7 +45,7 @@
         "default": "Ctrl+Shift+F",
         "mac": "MacCtrl+Shift+F"
       },
-      "description": "Start / Stop recording a tutorial"
+      "description": "Reserved"
     }
   }
 }

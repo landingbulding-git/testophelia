@@ -121,6 +121,44 @@ window.OpheliaOverlay = (() => {
         outline-offset: 3px !important;
         cursor: crosshair !important;
       }
+
+      /* --- Recording Confirmation --- */
+      #ophelia-confirm-pill {
+        position: fixed;
+        background: rgba(16, 16, 16, 0.95);
+        border: 1.5px solid #ff7a1a;
+        border-radius: 20px;
+        padding: 6px 8px;
+        display: flex;
+        gap: 8px;
+        z-index: 2147483647;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        pointer-events: auto;
+        animation: opheliaPillIn 0.2s ease-out;
+      }
+      @keyframes opheliaPillIn {
+        from { opacity: 0; transform: scale(0.9); }
+        to   { opacity: 1; transform: scale(1); }
+      }
+      .ophelia-pill-btn {
+        border: none;
+        border-radius: 14px;
+        padding: 4px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+        transition: filter 0.15s;
+      }
+      .ophelia-pill-btn:hover { filter: brightness(1.2); }
+      .ophelia-btn-accept { background: #22c55e; color: #fff; }
+      .ophelia-btn-edit   { background: #f59e0b; color: #fff; }
+      .ophelia-captured {
+        outline: 3px solid #ff7a1a !important;
+        outline-offset: 4px !important;
+        border-radius: 4px !important;
+        box-shadow: 0 0 15px rgba(255,122,26,0.5) !important;
+      }
     `;
     document.head.appendChild(s);
   }
@@ -167,8 +205,76 @@ window.OpheliaOverlay = (() => {
     }
   }
 
+  /**
+   * Shows an 'Accept/Edit' pill near a captured element during recording.
+   * Phase 1: Active Recording Foundation.
+   * Updated: Supports Enter (Accept) and Esc (Edit) keys.
+   */
+  function showRecordingConfirm(element, onAccept, onEdit) {
+    ensureStyles();
+    hide();
+
+    _currentTarget = element;
+    element.classList.add('ophelia-captured');
+
+    const pill = document.createElement('div');
+    pill.id = 'ophelia-confirm-pill';
+    pill.innerHTML = `
+      <div style="color:#888;font-size:9px;margin-bottom:4px;text-align:center;width:100%;">[Enter] Accept  |  [Esc] Edit</div>
+      <div style="display:flex;gap:8px;justify-content:center;">
+        <button class="ophelia-pill-btn ophelia-btn-accept">Accept</button>
+        <button class="ophelia-pill-btn ophelia-btn-edit">Edit</button>
+      </div>
+    `;
+    document.body.appendChild(pill);
+
+    // Position pill
+    const r = element.getBoundingClientRect();
+    const pillR = pill.getBoundingClientRect();
+    let top = r.top - pillR.height - 12;
+    if (top < 10) top = r.bottom + 12; // flip to bottom if no space above
+    
+    pill.style.top = `${top}px`;
+    pill.style.left = `${Math.max(10, r.left + (r.width/2) - (pillR.width/2))}px`;
+
+    const handleKey = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup();
+        onAccept();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup();
+        onEdit();
+      }
+    };
+
+    const cleanup = () => {
+      document.removeEventListener('keydown', handleKey, true);
+      hide();
+    };
+
+    pill.querySelector('.ophelia-btn-accept').onclick = (e) => {
+      e.stopPropagation();
+      cleanup();
+      onAccept();
+    };
+    pill.querySelector('.ophelia-btn-edit').onclick = (e) => {
+      e.stopPropagation();
+      cleanup();
+      onEdit();
+    };
+
+    document.addEventListener('keydown', handleKey, true);
+  }
+
   function pinTo(element) {
-    if (_currentTarget) _currentTarget.classList.remove('ophelia-target');
+    if (_currentTarget) {
+      _currentTarget.classList.remove('ophelia-target');
+      _currentTarget.classList.remove('ophelia-captured');
+    }
     _currentTarget = element;
     element.classList.add('ophelia-target');
     _moveDot(element);
@@ -178,7 +284,12 @@ window.OpheliaOverlay = (() => {
     _exitCorrectionMode(false);
     document.getElementById('ophelia-card')?.remove();
     document.getElementById('ophelia-dot')?.remove();
-    if (_currentTarget) { _currentTarget.classList.remove('ophelia-target'); _currentTarget = null; }
+    document.getElementById('ophelia-confirm-pill')?.remove();
+    if (_currentTarget) {
+      _currentTarget.classList.remove('ophelia-target');
+      _currentTarget.classList.remove('ophelia-captured');
+      _currentTarget = null;
+    }
   }
 
   // ── Correction mode ───────────────────────────────────────────────────────
@@ -265,5 +376,5 @@ window.OpheliaOverlay = (() => {
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  return { show, hide, pinTo };
+  return { show, hide, pinTo, showRecordingConfirm };
 })();
